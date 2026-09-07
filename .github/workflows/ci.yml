@@ -36,6 +36,8 @@ jobs:
       - run: sh tests/install_test.sh
       - name: Interactive init wizard (PTY)
         run: sh tests/wizard_test.sh
+      - name: DeepSWE benchmark harness
+        run: python3 -m unittest discover -s benchmarks/deepswe -p 'test_*.py'
       - name: Parse PowerShell installer
         shell: pwsh
         run: |

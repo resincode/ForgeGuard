@@ -661,6 +661,8 @@ cargo deny check
 cargo audit --deny warnings
 ```
 
+The [DeepSWE A/B harness](benchmarks/deepswe/README.md) compares the same Codex model and deterministic task sample with and without ForgeGuard, preserving Pier verifier results, token use, cost, steps, and elapsed time.
+
 Maintainers publish binaries by pushing a tag matching the workspace version, for example `v0.2.0`. The release workflow verifies the tag, tests the repository and installers, builds six native platform archives, generates checksums, and publishes the GitHub Release automatically.
 
 ## Security
