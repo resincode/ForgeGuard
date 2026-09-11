@@ -25,10 +25,11 @@ jobs:
       release_created: ${{ steps.release.outputs['crates/forgeguard-cli--release_created'] }}
       tag_name: ${{ steps.release.outputs['crates/forgeguard-cli--tag_name'] }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: main
           fetch-depth: 0
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN }}
 
       - uses: googleapis/release-please-action@v5
         id: release
@@ -39,6 +40,62 @@ jobs:
           target-branch: main
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
+
+      # Credit contributors in the newest CHANGELOG.md block: a per-line
+      # @handle, a Thanks list, a New Contributors welcome. Runs on the
+      # pending release branch so the credited changelog is already on `main`
+      # by the time the release PR merges. Maintainer commits are left as-is.
+      - name: Fold CHANGELOG into the repo root and attribute contributors
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_PLEASE_TOKEN }}
+          RELEASE_PR: ${{ steps.release.outputs.pr }}
+        run: |
+          branch=$(jq -r '.headBranchName // empty' <<<"$RELEASE_PR")
+          if [ -z "$branch" ]; then
+            branch=$(gh pr list --state open --label "autorelease: pending" \
+              --json headRefName --jq '.[0].headRefName')
+          fi
+          if [ -z "$branch" ]; then
+            echo "no open release PR; nothing to fold"
+            exit 0
+          fi
+          scripts=$(mktemp -d)
+          cp .github/scripts/fold_changelog.py \
+             .github/scripts/attribute_changelog.py "$scripts"/
+          git fetch origin "$branch"
+          git checkout "$branch"
+          python3 "$scripts/fold_changelog.py"
+          python3 "$scripts/attribute_changelog.py"
+          rm -f crates/forgeguard-cli/CHANGELOG.md
+          if git diff --quiet -- CHANGELOG.md crates/forgeguard-cli/CHANGELOG.md; then
+            echo "CHANGELOG already folded into the root"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A CHANGELOG.md crates/forgeguard-cli/CHANGELOG.md
+          git commit -m "docs: fold and attribute changelog"
+          git push origin "$branch"
+
+      - name: Use the credited changelog block as the Release body
+        if: ${{ steps.release.outputs['crates/forgeguard-cli--release_created'] }}
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_PLEASE_TOKEN }}
+          TAG: ${{ steps.release.outputs['crates/forgeguard-cli--tag_name'] }}
+        run: |
+          git checkout main
+          version="${TAG#v}"
+          awk -v h="[$version](" '
+            index($0, "## " h) == 1 || index($0, "## ForgeGuard: " h) == 1 { grab = 1; next }
+            grab && /^## / { exit }
+            grab { print }
+          ' CHANGELOG.md | sed '/./,$!d' > release-notes.md
+          if [ -s release-notes.md ] && grep -q '^### ' release-notes.md; then
+            gh release edit "$TAG" --notes-file release-notes.md
+          else
+            echo "no credited block for $version yet; leaving the body as-is"
+          fi
+          rm -f release-notes.md
 
   release:
     needs: release-please
