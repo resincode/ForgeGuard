@@ -43,9 +43,7 @@ pub fn run_checks_for_changes(
 
 fn command_applies(command: &CommandConfig, changed_paths: Option<&[PathBuf]>) -> bool {
     !is_supply_chain(command)
-        || changed_paths.map_or(true, |paths| {
-            paths.iter().any(|path| is_dependency_path(path))
-        })
+        || changed_paths.is_none_or(|paths| paths.iter().any(|path| is_dependency_path(path)))
 }
 
 fn is_supply_chain(command: &CommandConfig) -> bool {

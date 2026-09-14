@@ -11,7 +11,7 @@ edition = "2021"
 license = "MIT"
 authors = ["SuiFlex"]
 repository = "https://github.com/suiflex/ForgeGuard"
-rust-version = "1.78"
+rust-version = "1.88"
 
 [workspace.dependencies]
 anyhow = "1.0"

@@ -1186,7 +1186,7 @@ fn remove_grouped_hook_commands(document: &mut Value, event: &str, command: &str
         handler
             .get("hooks")
             .and_then(Value::as_array)
-            .map_or(true, |hooks| !hooks.is_empty())
+            .is_none_or(|hooks| !hooks.is_empty())
     });
 }
 
