@@ -4,6 +4,7 @@ use std::{
 };
 
 use anyhow::{bail, Context, Result};
+use kurir::{add_hook, hook_file, skills_dir, Harness, HookSpec, Scope};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
@@ -22,10 +23,9 @@ const AGENT_HOOK_FILES: [&str; 4] = [
     ".cursor/hooks.json",
     ".agents/hooks.json",
 ];
+const SKILL_NAME: &str = "forgeguard-engineering";
 /// Antigravity CLI moved global skills out of `.gemini/skills`; `.gemini/config`
 /// is documented only for `mcp_config.json`, never for skills or hooks.
-const GLOBAL_ANTIGRAVITY_SKILL_DIRECTORY: &str =
-    ".gemini/antigravity-cli/skills/forgeguard-engineering";
 const OBSOLETE_GLOBAL_ANTIGRAVITY_SKILL_DIRECTORY: &str =
     ".gemini/config/skills/forgeguard-engineering";
 const DEFAULT_STOP_HOOK_TIMEOUT_SECONDS: u64 = 600;
@@ -495,24 +495,19 @@ fn install_codex(
     write_file(root, &policy_path, AGENTS_TEMPLATE, overwrite, log)?;
     install_skill(
         root,
-        ".agents/skills/forgeguard-engineering",
+        &skill_directory(Harness::Codex, scope)?,
         overwrite,
         log,
     )?;
     let stop = hook_command(CODEX_HOOK_COMMAND, scope);
     let context = hook_command(CODEX_CONTEXT_HOOK_COMMAND, scope);
     let scope_hook = hook_command(CODEX_SCOPE_HOOK_COMMAND, scope);
+    let path = hook_path(root, Harness::Codex)?;
+    install_grouped_hook(root, Harness::Codex, &path, "Stop", None, &stop, log)?;
     install_grouped_hook(
         root,
-        &root.join(".codex/hooks.json"),
-        "Stop",
-        None,
-        &stop,
-        log,
-    )?;
-    install_grouped_hook(
-        root,
-        &root.join(".codex/hooks.json"),
+        Harness::Codex,
+        &path,
         "SessionStart",
         Some("startup|resume|compact"),
         &context,
@@ -520,7 +515,8 @@ fn install_codex(
     )?;
     install_grouped_hook(
         root,
-        &root.join(".codex/hooks.json"),
+        Harness::Codex,
+        &path,
         "PreToolUse",
         Some("apply_patch|Edit|Write"),
         &scope_hook,
@@ -544,24 +540,20 @@ fn install_claude(
     write_file(root, &policy_path, CLAUDE_TEMPLATE, overwrite, log)?;
     install_skill(
         root,
-        ".claude/skills/forgeguard-engineering",
+        &skill_directory(Harness::ClaudeCode, scope)?,
         overwrite,
         log,
     )?;
     let stop = hook_command(CLAUDE_HOOK_COMMAND, scope);
     let context = hook_command(CLAUDE_CONTEXT_HOOK_COMMAND, scope);
     let scope_hook = hook_command(CLAUDE_SCOPE_HOOK_COMMAND, scope);
+    let path = hook_path(root, Harness::ClaudeCode)?;
+    let harness = Harness::ClaudeCode;
+    install_grouped_hook(root, harness, &path, "Stop", None, &stop, log)?;
     install_grouped_hook(
         root,
-        &root.join(".claude/settings.json"),
-        "Stop",
-        None,
-        &stop,
-        log,
-    )?;
-    install_grouped_hook(
-        root,
-        &root.join(".claude/settings.json"),
+        harness,
+        &path,
         "SessionStart",
         Some("startup|resume|compact"),
         &context,
@@ -569,7 +561,8 @@ fn install_claude(
     )?;
     install_grouped_hook(
         root,
-        &root.join(".claude/settings.json"),
+        harness,
+        &path,
         "UserPromptSubmit",
         None,
         &context,
@@ -577,7 +570,8 @@ fn install_claude(
     )?;
     install_grouped_hook(
         root,
-        &root.join(".claude/settings.json"),
+        harness,
+        &path,
         "PreToolUse",
         Some("Edit|Write|MultiEdit|NotebookEdit"),
         &scope_hook,
@@ -598,11 +592,11 @@ fn install_cursor(
     write_file(root, &rule_path, CURSOR_TEMPLATE, overwrite, log)?;
     install_skill(
         root,
-        ".agents/skills/forgeguard-engineering",
+        &skill_directory(Harness::Cursor, scope)?,
         overwrite,
         log,
     )?;
-    let path = root.join(".cursor/hooks.json");
+    let path = hook_path(root, Harness::Cursor)?;
     let stop = hook_command(CURSOR_HOOK_COMMAND, scope);
     let context = hook_command(CURSOR_CONTEXT_HOOK_COMMAND, scope);
     let scope_hook = hook_command(CURSOR_SCOPE_HOOK_COMMAND, scope);
@@ -624,18 +618,17 @@ fn install_opencode(
     overwrite: bool,
     log: &mut InstallLog,
 ) -> Result<()> {
-    let (policy_path, skill_directory) = match scope {
-        InstallScope::Project => (
-            root.join("AGENTS.md"),
-            ".agents/skills/forgeguard-engineering",
-        ),
-        InstallScope::Global => (
-            root.join(".config/opencode/AGENTS.md"),
-            ".config/opencode/skills/forgeguard-engineering",
-        ),
+    let policy_path = match scope {
+        InstallScope::Project => root.join("AGENTS.md"),
+        InstallScope::Global => root.join(".config/opencode/AGENTS.md"),
     };
     write_file(root, &policy_path, AGENTS_TEMPLATE, overwrite, log)?;
-    install_skill(root, skill_directory, overwrite, log)
+    install_skill(
+        root,
+        &skill_directory(Harness::OpenCode, scope)?,
+        overwrite,
+        log,
+    )
 }
 
 fn install_shared_skill_agent(
@@ -645,10 +638,9 @@ fn install_shared_skill_agent(
     overwrite: bool,
     log: &mut InstallLog,
 ) -> Result<()> {
-    let skill_directory = match (target, scope) {
-        (AgentTarget::Hermes, InstallScope::Global) => ".hermes/skills/forgeguard-engineering",
-        (AgentTarget::OpenClaw, InstallScope::Global) => ".openclaw/skills/forgeguard-engineering",
-        (_, InstallScope::Project) => ".agents/skills/forgeguard-engineering",
+    let harness = match target {
+        AgentTarget::Hermes => Harness::Hermes,
+        AgentTarget::OpenClaw => Harness::OpenClaw,
         _ => unreachable!("only Hermes and OpenClaw use this installer"),
     };
     if matches!(scope, InstallScope::Project) {
@@ -660,7 +652,7 @@ fn install_shared_skill_agent(
             log,
         )?;
     }
-    install_skill(root, skill_directory, overwrite, log)
+    install_skill(root, &skill_directory(harness, scope)?, overwrite, log)
 }
 
 fn install_openclaw(
@@ -674,7 +666,7 @@ fn install_openclaw(
     }
     install_skill(
         root,
-        ".openclaw/skills/forgeguard-engineering",
+        &skill_directory(Harness::OpenClaw, scope)?,
         overwrite,
         log,
     )?;
@@ -764,21 +756,20 @@ fn install_antigravity(
     overwrite: bool,
     log: &mut InstallLog,
 ) -> Result<()> {
-    let (policy_path, skill_directory) = match scope {
-        InstallScope::Project => (
-            root.join(".agents/rules/forgeguard.md"),
-            ".agents/skills/forgeguard-engineering",
-        ),
-        InstallScope::Global => (
-            root.join(".gemini/GEMINI.md"),
-            GLOBAL_ANTIGRAVITY_SKILL_DIRECTORY,
-        ),
+    let policy_path = match scope {
+        InstallScope::Project => root.join(".agents/rules/forgeguard.md"),
+        InstallScope::Global => root.join(".gemini/GEMINI.md"),
     };
     if overwrite {
         remove_directory(root, OBSOLETE_GLOBAL_ANTIGRAVITY_SKILL_DIRECTORY)?;
     }
     write_file(root, &policy_path, AGENTS_TEMPLATE, overwrite, log)?;
-    install_skill(root, skill_directory, overwrite, log)?;
+    install_skill(
+        root,
+        &skill_directory(Harness::AntigravityCli, scope)?,
+        overwrite,
+        log,
+    )?;
 
     // Only the workspace agent has a documented local hook file. Antigravity
     // publishes no user-level hook path, so a global install stops at rules and
@@ -950,6 +941,7 @@ fn set_stop_hook_timeout(value: &mut Value, timeout: u64) -> bool {
 
 fn install_grouped_hook(
     root: &Path,
+    harness: Harness,
     path: &Path,
     event: &str,
     matcher: Option<&str>,
@@ -972,18 +964,45 @@ fn install_grouped_hook(
         record_path(root, path, &mut log.skipped);
         return Ok(());
     }
-    let hooks = object_field(&mut document, "hooks", path)?;
-    let command_hook = json!({
-        "type": "command",
-        "command": command,
-        "timeout": if event == "Stop" { stop_hook_timeout_seconds(root) } else { 5 }
-    });
-    let mut handler = json!({"hooks": [command_hook]});
-    if let Some(matcher) = matcher {
-        handler["matcher"] = json!(matcher);
-    }
-    array_field(hooks, event, path)?.push(handler);
+    let timeout_seconds = if event == "Stop" {
+        stop_hook_timeout_seconds(root)
+    } else {
+        5
+    };
+    add_hook(
+        harness,
+        &mut document,
+        &hook_spec(event, matcher, command, timeout_seconds),
+        path,
+    )?;
     write_json_document(root, path, &document, &mut log.written)
+}
+
+fn hook_spec(event: &str, matcher: Option<&str>, command: &str, timeout_seconds: u64) -> HookSpec {
+    HookSpec {
+        event: event.to_owned(),
+        matcher: matcher.map(str::to_owned),
+        command: command.to_owned(),
+        timeout_seconds,
+    }
+}
+
+/// The harness's own hook file under `root`, which is the project or the home
+/// directory depending on scope.
+fn hook_path(root: &Path, harness: Harness) -> Result<PathBuf> {
+    let relative = hook_file(harness)
+        .with_context(|| format!("{harness} documents no hook configuration file"))?;
+    Ok(root.join(relative))
+}
+
+fn skill_directory(harness: Harness, scope: InstallScope) -> Result<String> {
+    let scope = match scope {
+        InstallScope::Project => Scope::Project,
+        InstallScope::Global => Scope::User,
+    };
+    let directory = skills_dir(harness, scope)
+        .with_context(|| format!("{harness} documents no skill directory"))?;
+    Ok(format!("{directory}/{SKILL_NAME}"))
 }
 
 fn install_cursor_hook(
@@ -1010,20 +1029,17 @@ fn install_cursor_hook(
         record_path(root, path, &mut log.skipped);
         return Ok(());
     }
-    document
-        .as_object_mut()
-        .expect("validated JSON object")
-        .entry("version")
-        .or_insert(json!(1));
-    let hooks = object_field(&mut document, "hooks", path)?;
-    let mut handler = json!({
-        "command": command,
-        "timeout": if event == "stop" { stop_hook_timeout_seconds(root) } else { 5 }
-    });
-    if let Some(matcher) = matcher {
-        handler["matcher"] = json!(matcher);
-    }
-    array_field(hooks, event, path)?.push(handler);
+    let timeout_seconds = if event == "stop" {
+        stop_hook_timeout_seconds(root)
+    } else {
+        5
+    };
+    add_hook(
+        Harness::Cursor,
+        &mut document,
+        &hook_spec(event, matcher, command, timeout_seconds),
+        path,
+    )?;
     write_json_document(root, path, &document, &mut log.written)
 }
 
