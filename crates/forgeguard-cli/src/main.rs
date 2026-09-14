@@ -1954,6 +1954,40 @@ mod tests {
     }
 
     #[test]
+    fn parses_mcp_serve_and_register() {
+        let serve = Cli::try_parse_from(["forgeguard", "mcp", "serve"]).expect("parse mcp serve");
+        assert!(matches!(
+            serve.command,
+            Commands::Mcp {
+                command: McpCommands::Serve
+            }
+        ));
+
+        let register = Cli::try_parse_from([
+            "forgeguard",
+            "mcp",
+            "register",
+            "--client",
+            "claude-code",
+            "--project",
+            "--dry-run",
+        ])
+        .expect("parse mcp register");
+        assert!(matches!(
+            register.command,
+            Commands::Mcp {
+                command: McpCommands::Register {
+                    ref client,
+                    project: true,
+                    dry_run: true,
+                    force: false,
+                }
+            } if client == "claude-code"
+        ));
+        assert!(Cli::try_parse_from(["forgeguard", "mcp", "register"]).is_err());
+    }
+
+    #[test]
     fn parses_cross_role_task_contract_and_evidence() {
         let start = Cli::try_parse_from([
             "forgeguard",
