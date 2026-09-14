@@ -19,6 +19,8 @@ use forgeguard_core::{
     HookDecision, InitOptions, TaskProfile, BASELINE_FILE, LANGUAGE_CAPABILITIES, RULES,
 };
 
+mod mcp;
+
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[derive(Debug, Parser)]
@@ -145,6 +147,31 @@ enum Commands {
         /// Output in JSON format
         #[arg(long)]
         json: bool,
+    },
+    /// Serve ForgeGuard over MCP stdio or register it with an agent harness.
+    Mcp {
+        #[command(subcommand)]
+        command: McpCommands,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum McpCommands {
+    /// Serve the gate, doctor, and task status tools over MCP stdio.
+    Serve,
+    /// Register `forgeguard mcp serve` with an agent harness.
+    Register {
+        /// Harness id such as claude-code, codex, cursor, or opencode.
+        #[arg(long)]
+        client: String,
+        /// Write the harness's project configuration under --root.
+        #[arg(long)]
+        project: bool,
+        #[arg(long)]
+        dry_run: bool,
+        /// Replace an existing, different `forgeguard` entry.
+        #[arg(long)]
+        force: bool,
     },
 }
 
@@ -646,6 +673,18 @@ fn execute() -> Result<ExitCode> {
             global,
             json,
         } => execute_update(&root, check, mode, global, json),
+        Commands::Mcp {
+            command: McpCommands::Serve,
+        } => mcp::serve(root).map(|()| ExitCode::SUCCESS),
+        Commands::Mcp {
+            command:
+                McpCommands::Register {
+                    client,
+                    project,
+                    dry_run,
+                    force,
+                },
+        } => mcp::register(&root, &client, project, dry_run, force).map(|()| ExitCode::SUCCESS),
     }
 }
 
@@ -1710,8 +1749,8 @@ mod tests {
 
     use super::{
         agent_menu_rows, agents_from_names, agents_from_rows, execute_mode, summarize_paths,
-        AgentTarget, BaselineCommands, Cli, Commands, ConfigCommands, HookCommands, ModeArg,
-        OutputArg,
+        AgentTarget, BaselineCommands, Cli, Commands, ConfigCommands, HookCommands, McpCommands,
+        ModeArg, OutputArg,
     };
 
     fn temporary_project(label: &str) -> std::path::PathBuf {
