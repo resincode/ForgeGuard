@@ -612,6 +612,22 @@ When run in a terminal without an explicit mode, `forgeguard mode` opens the sam
 | `forgeguard task ready` | Submit exact evidence, provenance, artifacts, acceptance coverage, and optional model confidence before the completion gate. |
 | `forgeguard task status` | Inspect session-scoped objective state. |
 | `forgeguard hook stop/context/scope` | Internal lifecycle adapters for completion, objective restoration, and scope warnings. |
+| `forgeguard mcp serve` | Serve the `gate`, `doctor`, and `task_status` tools over MCP stdio. |
+| `forgeguard mcp register --client <harness>` | Register `forgeguard mcp serve` with an agent harness through [Kurir](https://github.com/suiflex/kurir); `--project` writes project configuration, `--dry-run` previews. |
+
+### MCP server
+
+Agents that prefer tools over shelling out can reach the same checks over MCP:
+
+```bash
+forgeguard mcp register --client claude-code            # ~/.claude.json
+forgeguard mcp register --client cursor --dry-run       # preview only
+forgeguard mcp register --client codex                  # delegates to `codex mcp add`
+```
+
+The server exposes `gate` (`changed`, `no_run`, `base`), `doctor`, and
+`task_status` (`session`). It only reads and verifies; task state is still
+written through `forgeguard task` and the lifecycle hooks.
 
 ## Agent contract
 
