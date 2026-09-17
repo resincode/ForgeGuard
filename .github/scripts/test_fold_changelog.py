@@ -89,9 +89,18 @@ def test_missing_version_raises():
 
 
 if __name__ == "__main__":
-    cases = sorted((name, fn) for name, fn in globals().items() if name.startswith("test_"))
-    for name, fn in cases:
-        fn()
-        print(f"ok   {name}")
-    print("---")
-    print(f"{len(cases)} passed, 0 failed")
+    tests = [
+        test_parse_version_single_section,
+        test_extract_clean_single_section,
+        test_extract_with_unreleased_header,
+        test_fold_prefixes_product_heading,
+        test_fold_with_unreleased_in_src,
+        test_fold_replaces_existing_version,
+        test_missing_version_raises,
+    ]
+    passed = 0
+    for run in tests:
+        run()
+        print(f"ok   {run.__name__}")
+        passed += 1
+    print(f"---\n{passed} passed, 0 failed")
