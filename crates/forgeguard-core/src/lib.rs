@@ -8,6 +8,7 @@ pub mod gate;
 pub mod git;
 pub mod hook;
 pub mod init;
+pub mod memory;
 pub mod model;
 pub mod report;
 pub mod rules;
@@ -33,6 +34,14 @@ pub use hook::{
 pub use init::{
     detect_installed_agents, initialize_global, initialize_project, AgentTarget, GlobalInitReport,
     InitOptions, InitReport,
+};
+pub use memory::{
+    analyze_impact, architecture, available_servers, delete_project, export_artifact, find_symbols,
+    index_repository, index_status, list_projects, refresh_changed, symbol_card, trace_path,
+    watch_repository, Architecture, ArtifactReport, Detail, Direction, ImpactReport, IndexOptions,
+    IndexReport, IndexStatus, LspOptions, LspReport, LspStats, MemoryStats, ProjectEntry,
+    RetrievalOptions, RiskLevel, Store, Symbol, SymbolCard, SymbolHit, SymbolKind, TraceReport,
+    WatchOptions, WatchTick, ARTIFACT_FILE, BEST_LEVEL, DATABASE_FILE, FAST_LEVEL, MEMORY_DIR,
 };
 pub use model::{CheckResult, EvidenceConfidence, Finding, GateReport, GateStatus, Severity};
 pub use rules::{LanguageCapability, RuleMetadata, LANGUAGE_CAPABILITIES, RULES};

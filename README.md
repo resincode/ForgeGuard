@@ -612,7 +612,20 @@ When run in a terminal without an explicit mode, `forgeguard mode` opens the sam
 | `forgeguard task ready` | Submit exact evidence, provenance, artifacts, acceptance coverage, and optional model confidence before the completion gate. |
 | `forgeguard task status` | Inspect session-scoped objective state. |
 | `forgeguard hook stop/context/scope` | Internal lifecycle adapters for completion, objective restoration, and scope warnings. |
-| `forgeguard mcp serve` | Serve the `gate`, `doctor`, and `task_status` tools over MCP stdio. |
+| `forgeguard memory index` | Build or refresh the code graph; `--changed` re-indexes only what Git reports, `--force` reparses everything, `--lsp` adds language-server type resolution. |
+| `forgeguard memory find <query>` | Find symbols by name, `Type.method`, or substring. Metadata only, no source read. |
+| `forgeguard memory search <query>` | Rank symbols by BM25 over name, signature, and path. |
+| `forgeguard memory symbol <query>` | Retrieve one symbol at `--detail metadata\|structure\|snippet\|full` within `--max-bytes`. |
+| `forgeguard memory trace <query>` | Walk the call chain `--direction inbound\|outbound\|both` up to `--depth 5`. |
+| `forgeguard memory query <cypher>` | Run a read-only Cypher-like query over the graph. |
+| `forgeguard memory impact` | Map the Git diff to changed symbols, callers, dependents, tests, and risk. |
+| `forgeguard memory architecture` | Summarise languages, modules, layers, entry points, routes, and dependencies. |
+| `forgeguard memory stats` | Report indexed files, queries, and the source bytes the graph avoided reading. |
+| `forgeguard memory projects` / `status` / `delete --yes` | List indexed repositories, report this one's freshness, or drop its graph. |
+| `forgeguard memory watch` | Re-index on an interval, printing one JSON line per changed tick. |
+| `forgeguard memory export` / `import` | Write or load the zstd-compressed graph artifact at `.forgeguard/memory/graph.db.zst`. |
+| `forgeguard memory servers` | List the language servers ForgeGuard knows about and found on PATH. |
+| `forgeguard mcp serve` | Serve the `gate`, `doctor`, `task_status`, and `memory_*` tools over MCP stdio. |
 | `forgeguard mcp register --client <harness>` | Register `forgeguard mcp serve` with an agent harness through [Kurir](https://github.com/suiflex/kurir); `--project` writes project configuration, `--dry-run` previews. |
 
 ### MCP server
@@ -625,9 +638,104 @@ forgeguard mcp register --client cursor --dry-run       # preview only
 forgeguard mcp register --client codex                  # delegates to `codex mcp add`
 ```
 
-The server exposes `gate` (`changed`, `no_run`, `base`), `doctor`, and
-`task_status` (`session`). It only reads and verifies; task state is still
-written through `forgeguard task` and the lifecycle hooks.
+The server exposes `gate` (`changed`, `no_run`, `base`), `doctor`,
+`task_status` (`session`), and the code-memory tools `memory_index`,
+`memory_find`, `memory_search`, `memory_symbol`, `memory_trace`, `memory_query`,
+`memory_impact`, `memory_architecture`, `memory_status`, `memory_projects`,
+`memory_stats`, and `memory_delete` (which requires `confirm=true`). Apart from
+the graph it owns, it only reads and verifies; task state is still written
+through `forgeguard task` and the lifecycle hooks.
+
+## Code memory
+
+ForgeGuard keeps a structural index of the repository in a SQLite database at
+`.forgeguard/cache/memory/graph.db`, built with the same tree-sitter parsers the
+scanner already uses. It answers "where is this symbol, who calls it, what does
+this change break" from the graph instead of re-reading files.
+
+```bash
+forgeguard memory index                                   # first build
+forgeguard memory symbol AuthService.validateToken        # signature, callers, callees, tests
+forgeguard memory symbol AuthService.validateToken --detail snippet
+forgeguard memory search "validate token"                 # BM25 when the name is fuzzy
+forgeguard memory trace validateToken --direction inbound --depth 3
+forgeguard memory query 'MATCH (f:Route) RETURN f.route_path, f.qualified'
+forgeguard memory impact --base origin/main               # blast radius and risk
+forgeguard memory watch --interval 5                      # background auto-sync
+```
+
+- **Incremental.** A file is reparsed only when its size, mtime, or content hash
+  moved; `--changed` scopes the refresh to the Git diff. Deleted and renamed
+  files leave or move in the graph.
+- **Progressive.** `metadata` → `structure` → `snippet` → `full`, bounded by
+  `--max-bytes`. Source over budget is dropped, never half-returned.
+- **No source copies.** Snippets are read from the working tree by line range,
+  so the index cannot serve stale code.
+- **Typed call edges.** Receiver types are resolved statically for Rust,
+  TypeScript/JavaScript, Python, and Go, so `Service.get` and `Client.get` do not
+  share a caller bucket. Ambiguous receivers stay unresolved rather than guessed.
+- **Hybrid language-server resolution.** `--lsp` asks an installed language
+  server about the call sites the static pass left open, for Rust, TypeScript,
+  JavaScript, Python, Go, Java, Kotlin, C, C++, C#, PHP, and Perl. Opt-in,
+  budgeted, and skipped silently when no server is installed.
+- **Routes and services.** HTTP route declarations become graph nodes, and
+  outbound HTTP calls with a literal URL are linked to the route they hit.
+- **Risk-scored impact.** Each changed symbol gets `low`/`medium`/`high` from its
+  fan-in, whether it is exported, whether it serves a route, and whether any
+  indexed test reaches it — with the reasons spelled out.
+- **Measured.** `forgeguard memory stats` reports queries, cache hits, and the
+  source bytes the graph avoided reading.
+
+### Query language
+
+`forgeguard memory query` accepts a read-only subset of Cypher. Mutations
+(`CREATE`, `DELETE`, `SET`, `MERGE`, `DROP`), statement chaining, and raw SQL are
+rejected; values reach SQLite only as bound parameters.
+
+| Part | Supported |
+|---|---|
+| Shapes | `MATCH (a:Label) [WHERE …] RETURN a.prop[, …] [LIMIT n]`, `MATCH (a:Label)-[:REL]->(b:Label) [WHERE …] RETURN …` |
+| Labels | `Function`, `Method`, `Type`, `Module`, `Route`, `File` |
+| Relationships | `CALLS`, `CALLED_BY`, `EXTENDS`, `IMPLEMENTED_BY`, `CONTAINS`, `IMPORTS` / `DEPENDS_ON`, `ROUTES_TO` |
+| `WHERE` | `a.prop = "v"`, `a.prop =~ "glob*"`, joined with `AND` |
+| Properties | `name`, `qualified`, `kind`, `path`, `line`, `signature`, `exported`, `is_test`, `route_method`, `route_path` |
+
+### Sharing the graph
+
+```bash
+forgeguard memory export          # writes .forgeguard/memory/graph.db.zst
+forgeguard memory export --best=false   # faster, larger: for a watcher refresh
+forgeguard memory import          # seeds a fresh checkout from the committed artifact
+```
+
+The artifact is the graph with its indexes stripped, compacted with
+`VACUUM INTO`, then zstd-compressed; the importer rebuilds the indexes. Commit it
+and a teammate's first index reuses it: the stat pass confirms the files are
+unchanged and nothing is reparsed. An uncompressed `graph.db` written by an
+earlier version is still read.
+
+### Language servers
+
+```bash
+forgeguard memory servers                              # what is installed
+forgeguard memory index --lsp --lsp-budget 60          # hybrid resolution
+```
+
+The static pass runs first and owns everything it can answer; a language server
+is asked only about what it left open, so a run with nothing installed costs one
+directory scan. Every request is bounded by `--lsp-timeout` and the whole pass by
+`--lsp-budget`; a server that hangs is dropped for the rest of the run, and the
+index still completes. The report includes what the pass cost and resolved.
+
+### Multiple repositories
+
+`forgeguard memory projects` lists every repository indexed on this machine,
+`forgeguard memory status` reports whether this repository's graph exists and
+matches HEAD, and `forgeguard memory delete --yes` removes the graph (never the
+source).
+
+The MCP tools index on first use and refresh from the Git diff afterwards, so an
+agent never has to call an index tool first.
 
 ## Agent contract
 

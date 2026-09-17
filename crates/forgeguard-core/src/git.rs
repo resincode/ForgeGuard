@@ -65,6 +65,21 @@ pub fn repository_roots(root: &Path) -> Result<Vec<PathBuf>> {
     Ok(repositories)
 }
 
+/// The commit the working tree is based on, or `None` outside a repository or
+/// before the first commit. Part of the code-memory cache identity.
+pub fn head_commit(root: &Path) -> Result<Option<String>> {
+    let output = Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(root)
+        .output()
+        .context("failed to execute git rev-parse")?;
+    if !output.status.success() {
+        return Ok(None);
+    }
+    let commit = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+    Ok((!commit.is_empty()).then_some(commit))
+}
+
 pub fn changed_files(root: &Path) -> Result<Vec<std::path::PathBuf>> {
     let output = status_output(root)?;
     changed_paths(root, &output.stdout)

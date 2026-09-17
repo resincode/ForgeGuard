@@ -5,8 +5,12 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use forgeguard_core::{
-    config::{ForgeGuardConfig, CONFIG_FILE},
-    run_changed_gate, run_doctor, run_gate, task_state, GateOptions,
+    analyze_impact, architecture,
+    config::{ForgeGuardConfig, ScanConfig, CONFIG_FILE},
+    delete_project, find_symbols, index_repository, index_status, list_projects,
+    memory::{refresh_changed, run_query, search_symbols},
+    run_changed_gate, run_doctor, run_gate, symbol_card, task_state, trace_path, Detail, Direction,
+    GateOptions, IndexOptions, LspOptions, MemoryStats, RetrievalOptions, Store,
 };
 use kurir::{Harness, RegistrationOptions, Scope, ServerSpec};
 use rmcp::{
@@ -44,6 +48,67 @@ struct TaskStatusRequest {
 
 #[derive(Debug, Default, Deserialize, JsonSchema)]
 struct DoctorRequest {}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct MemoryFindRequest {
+    /// Symbol name, `Type.method`, or a substring.
+    query: String,
+    /// Maximum hits to return; defaults to 20.
+    limit: Option<usize>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct MemorySymbolRequest {
+    /// Symbol name or `Type.method`.
+    query: String,
+    /// `metadata`, `structure` (default), `snippet`, or `full`.
+    detail: Option<String>,
+    /// Maximum source bytes to return; defaults to 8192.
+    max_bytes: Option<usize>,
+}
+
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+struct MemoryImpactRequest {
+    /// Git revision to compare against; defaults to the working tree vs HEAD.
+    base: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+struct MemoryArchitectureRequest {}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct MemoryTraceRequest {
+    /// Symbol name or `Type.method` to start from.
+    query: String,
+    /// `inbound` (callers), `outbound` (callees), or `both` (default).
+    direction: Option<String>,
+    /// Hops to follow, 1 to 5; defaults to 2.
+    depth: Option<usize>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct MemoryQueryRequest {
+    /// A `MATCH ... RETURN` query. Mutations and raw SQL are rejected.
+    query: String,
+    /// Maximum rows; defaults to 100.
+    limit: Option<usize>,
+}
+
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+struct MemoryIndexRequest {
+    /// Reparse every file instead of trusting cached hashes.
+    force: Option<bool>,
+    /// Ask installed language servers about call sites the static pass could not
+    /// attribute to a type. Off by default: it needs external tools.
+    lsp: Option<bool>,
+}
+
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+struct MemoryDeleteRequest {
+    /// Must be true: deleting the graph cannot be undone without re-indexing.
+    #[serde(default)]
+    confirm: bool,
+}
 
 #[tool_router]
 impl ForgeGuardMcp {
@@ -113,6 +178,249 @@ impl ForgeGuardMcp {
         })
         .await
     }
+
+    #[tool(
+        name = "memory_find",
+        description = "Find symbols in the persistent code graph by name, qualified name, or substring. Returns metadata only: no source is read."
+    )]
+    async fn memory_find(
+        &self,
+        Parameters(request): Parameters<MemoryFindRequest>,
+    ) -> Result<String, String> {
+        let root = self.root.clone();
+        blocking(move || {
+            let store = ensure_index(&root)?;
+            find_symbols(&root, &store, &request.query, request.limit.unwrap_or(20))
+        })
+        .await
+    }
+
+    #[tool(
+        name = "memory_search",
+        description = "Rank symbols by BM25 over name, signature, and path. Use when the exact symbol name is unknown; use memory_find when it is."
+    )]
+    async fn memory_search(
+        &self,
+        Parameters(request): Parameters<MemoryFindRequest>,
+    ) -> Result<String, String> {
+        let root = self.root.clone();
+        blocking(move || {
+            let store = ensure_index(&root)?;
+            search_symbols(&root, &store, &request.query, request.limit.unwrap_or(20))
+        })
+        .await
+    }
+
+    #[tool(
+        name = "memory_trace",
+        description = "Walk the call chain from a symbol: inbound (callers), outbound (callees), or both, up to 5 hops."
+    )]
+    async fn memory_trace(
+        &self,
+        Parameters(request): Parameters<MemoryTraceRequest>,
+    ) -> Result<String, String> {
+        let root = self.root.clone();
+        blocking(move || {
+            let store = ensure_index(&root)?;
+            let direction = parse_direction(request.direction.as_deref())?;
+            trace_path(
+                &root,
+                &store,
+                &request.query,
+                direction,
+                request.depth.unwrap_or(2),
+            )?
+            .with_context(|| format!("no indexed symbol matches {}", request.query))
+        })
+        .await
+    }
+
+    #[tool(
+        name = "memory_query",
+        description = "Run a read-only Cypher-like query over the graph, for example MATCH (f:Function)-[:CALLS]->(g:Function) WHERE f.name = \"main\" RETURN g.qualified. Mutations and raw SQL are rejected."
+    )]
+    async fn memory_query(
+        &self,
+        Parameters(request): Parameters<MemoryQueryRequest>,
+    ) -> Result<String, String> {
+        let root = self.root.clone();
+        blocking(move || {
+            let store = ensure_index(&root)?;
+            run_query(&root, &store, &request.query, request.limit.unwrap_or(100))
+        })
+        .await
+    }
+
+    #[tool(
+        name = "memory_symbol",
+        description = "Retrieve one symbol at the requested detail: metadata, structure (callers, callees, dependents, tests), snippet, or full file. Prefer the smallest level that answers the question."
+    )]
+    async fn memory_symbol(
+        &self,
+        Parameters(request): Parameters<MemorySymbolRequest>,
+    ) -> Result<String, String> {
+        let root = self.root.clone();
+        blocking(move || {
+            let store = ensure_index(&root)?;
+            let options = RetrievalOptions {
+                detail: parse_detail(request.detail.as_deref())?,
+                max_bytes: request.max_bytes.unwrap_or(8192),
+            };
+            symbol_card(&root, &store, &request.query, &options)?
+                .with_context(|| format!("no indexed symbol matches {}", request.query))
+        })
+        .await
+    }
+
+    #[tool(
+        name = "memory_impact",
+        description = "Map the current Git diff to changed symbols, their callers, dependent files, and related tests."
+    )]
+    async fn memory_impact(
+        &self,
+        Parameters(request): Parameters<MemoryImpactRequest>,
+    ) -> Result<String, String> {
+        let root = self.root.clone();
+        blocking(move || {
+            let store = ensure_index(&root)?;
+            analyze_impact(&root, &store, request.base.as_deref())
+        })
+        .await
+    }
+
+    #[tool(
+        name = "memory_index",
+        description = "Build or refresh the code graph. Other memory tools index on first use, so call this only to force a rebuild or to warm the graph up front."
+    )]
+    async fn memory_index(
+        &self,
+        Parameters(request): Parameters<MemoryIndexRequest>,
+    ) -> Result<String, String> {
+        let root = self.root.clone();
+        blocking(move || {
+            let config = scan_config(&root)?;
+            index_repository(
+                &root,
+                &config,
+                &IndexOptions {
+                    force: request.force.unwrap_or(false),
+                    paths: None,
+                    lsp: request.lsp.unwrap_or(false).then(LspOptions::default),
+                },
+            )
+        })
+        .await
+    }
+
+    #[tool(
+        name = "memory_status",
+        description = "Report whether this repository has an index, how large it is, and whether it was built against the checked-out commit."
+    )]
+    async fn memory_status(
+        &self,
+        Parameters(_): Parameters<MemoryArchitectureRequest>,
+    ) -> Result<String, String> {
+        let root = self.root.clone();
+        blocking(move || index_status(&root)).await
+    }
+
+    #[tool(
+        name = "memory_projects",
+        description = "List repositories on this machine that have a ForgeGuard code graph."
+    )]
+    async fn memory_projects(
+        &self,
+        Parameters(_): Parameters<MemoryArchitectureRequest>,
+    ) -> Result<String, String> {
+        blocking(list_projects).await
+    }
+
+    #[tool(
+        name = "memory_stats",
+        description = "Report indexing and retrieval counters, including the source bytes the graph avoided reading."
+    )]
+    async fn memory_stats(
+        &self,
+        Parameters(_): Parameters<MemoryArchitectureRequest>,
+    ) -> Result<String, String> {
+        let root = self.root.clone();
+        blocking(move || Ok(MemoryStats::load(&root))).await
+    }
+
+    #[tool(
+        name = "memory_delete",
+        description = "Delete this repository's code graph. Requires confirm=true. Source files are never touched; the graph can be rebuilt by indexing again."
+    )]
+    async fn memory_delete(
+        &self,
+        Parameters(request): Parameters<MemoryDeleteRequest>,
+    ) -> Result<String, String> {
+        let root = self.root.clone();
+        blocking(move || {
+            if !request.confirm {
+                anyhow::bail!("refusing to delete the index without confirm=true");
+            }
+            Ok(serde_json::json!({ "deleted": delete_project(&root)? }))
+        })
+        .await
+    }
+
+    #[tool(
+        name = "memory_architecture",
+        description = "Summarise the repository in one request: languages, modules, layers, entry points, and external dependencies."
+    )]
+    async fn memory_architecture(
+        &self,
+        Parameters(_): Parameters<MemoryArchitectureRequest>,
+    ) -> Result<String, String> {
+        let root = self.root.clone();
+        blocking(move || {
+            let store = ensure_index(&root)?;
+            architecture(&root, &store)
+        })
+        .await
+    }
+}
+
+fn parse_detail(value: Option<&str>) -> Result<Detail> {
+    match value {
+        None | Some("structure") => Ok(Detail::Structure),
+        Some("metadata") => Ok(Detail::Metadata),
+        Some("snippet") => Ok(Detail::Snippet),
+        Some("full") => Ok(Detail::Full),
+        Some(other) => {
+            anyhow::bail!("unknown detail {other}: use metadata, structure, snippet, or full")
+        }
+    }
+}
+
+fn parse_direction(value: Option<&str>) -> Result<Direction> {
+    match value {
+        None | Some("both") => Ok(Direction::Both),
+        Some("inbound") => Ok(Direction::Inbound),
+        Some("outbound") => Ok(Direction::Outbound),
+        Some(other) => {
+            anyhow::bail!("unknown direction {other}: use inbound, outbound, or both")
+        }
+    }
+}
+
+fn scan_config(root: &Path) -> Result<ScanConfig> {
+    ForgeGuardConfig::scan_settings(root)
+}
+
+/// Keep the graph current without making the agent call an index tool first: an
+/// empty index is built, an existing one is refreshed from the Git diff. A
+/// refresh failure (no Git, for example) leaves the existing index in use.
+fn ensure_index(root: &Path) -> Result<Store> {
+    let config = scan_config(root)?;
+    let store = Store::open(root)?;
+    if store.is_empty()? {
+        index_repository(root, &config, &IndexOptions::default())?;
+    } else {
+        let _ = refresh_changed(root, &config, None);
+    }
+    Store::open(root)
 }
 
 #[tool_handler(router = self.tool_router)]
