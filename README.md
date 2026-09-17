@@ -321,7 +321,8 @@ Only the selected agents are written. A repository that uses Claude Code alone g
 your-project/
 ├── .forgeguard/config.toml
 ├── .forgeguard/baseline.json  # after `forgeguard baseline create`
-├── .forgeguard/.gitignore
+├── .forgeguard/memory/graph.db.zst  # after `forgeguard memory export`, meant to be committed
+├── .forgeguard/.gitignore  # ignores cache/ and reports/, not the artifact
 ├── CLAUDE.md
 ├── .claude/settings.json
 └── .claude/skills/forgeguard-engineering/
@@ -449,6 +450,7 @@ Core capabilities include:
 - AST-backed loop and call-site analysis across the published parser capability matrix.
 - Bounded database/network provenance packs for JavaScript/TypeScript, Python, Rust, and Go.
 - Clean-as-you-code review at added/edited-line scope, optional base-ref comparison, changed-line LCOV policy, and committed finding baselines.
+- A persistent code graph with symbol-level retrieval, BM25 and structural search, call tracing, diff impact with risk, and an architecture summary, so an agent stops re-reading files to answer the same structural questions.
 - Repository-scoped `default`, `lite`, and `strict` Code Guard modes.
 - Optional dependency-audit, license-inventory/policy, and SBOM commands, discovered but disabled by default so realtime gates make no network calls.
 

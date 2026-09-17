@@ -12,6 +12,7 @@ For non-code work, interpret the workflow as inspect → frame → produce → c
 ## Work surgically
 
 - Inspect the affected code, tests, contracts, schemas, direct callers, and compatibility surface before editing.
+- Inspect through the code graph before reading files: `forgeguard memory symbol <name>` returns the signature, callers, callees, dependents, and related tests; `--detail snippet` adds only that symbol's source; `forgeguard memory impact` maps the current diff to affected symbols, tests, and risk. Read a whole file when the graph cannot answer, not first.
 - Resolve missing facts with read-only inspection. When unresolved ambiguity materially changes behavior, data, security, scope, cost, or external or irreversible state, use the host's native structured user-input tool and wait; otherwise state the safest reversible assumption.
 - Reuse an existing project pattern only when its purpose and change reasons match. Prefer the standard library and installed dependencies over new abstractions or packages.
 - Make every changed line trace to the objective. Do not refactor adjacent code or remove pre-existing dead code; remove only orphans created by the change.

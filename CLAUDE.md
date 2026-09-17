@@ -35,6 +35,10 @@ because it needs macOS `qlmanage` and Pillow.
   is never caught by CI. Gate unix-only tests with `#[cfg(unix)]`.
 - A `// forgeguard: allow FG-XXX -- reason` marker suppresses the rule for only
   the two lines that follow it, so keep the marker on the line above the finding.
+- The code graph under `.forgeguard/cache/memory/` is a cache: bump
+  `memory::store::SCHEMA_VERSION` when extraction or the schema changes and it
+  rebuilds itself. The committed artifact is `.forgeguard/memory/graph.db.zst`
+  instead, which `.forgeguard/.gitignore` deliberately does not ignore.
 - Terminal output uses the stdlib-only `theme` module in
   `crates/forgeguard-cli/src/main.rs` — no color crates. Anything it prints must
   collapse to plain text when stdout is not a terminal or `NO_COLOR` is set.
