@@ -40,6 +40,24 @@ Parser-backed function scopes also receive alpha-renamed Type-2 clone evidence a
 
 Source walking honors Git ignore files and excludes generated or dependency directories. Files larger than the configured limit are skipped.
 
+## Code memory
+
+`forgeguard-core/src/memory` keeps a structural index of the repository so an agent stops rediscovering it. It reuses the scanner's `LanguageProfile`, its tree-sitter grammars, and its file walk; there is no second parser and no second exclusion policy.
+
+- `store.rs` owns the SQLite schema at `.forgeguard/cache/memory/graph.db` (files, imports, exports, symbols, calls, extends, service links) and every indexed lookup. The database is a cache: a schema-version mismatch drops the tables instead of migrating, and a path that would escape the repository root is refused at write time.
+- `mod.rs` owns the data model and the indexing lifecycle. A file is reparsed only when size, mtime, or content hash moved; a known hash under a new path counts as a rename.
+- `extract.rs` walks the parse tree once per file and records functions, methods, types, containers, imports, exports, call targets with statically resolved receiver types, supertypes, HTTP routes, and outbound service calls. Classification is by node-kind convention with an explicit reject list, which covers the whole parser matrix instead of one query per grammar. A receiver that cannot be resolved unambiguously stays `None`, because a wrong receiver poisons the caller and callee joins.
+- `query.rs` serves four detail levels — metadata, structure, snippet, full file — under a byte budget, plus Git-diff impact analysis with structural risk scoring and an architecture summary.
+- `search.rs` ranks symbols with BM25 over name, signature, and path, tokenised across camelCase and snake_case. No embeddings: structural lookup answers most questions more cheaply and exactly.
+- `cypher.rs` parses a read-only `MATCH … RETURN` subset and executes it through the typed store API, so user values never reach SQL except as bound parameters. Mutations, statement chaining, and SQL keywords are rejected before execution.
+- `trace.rs` walks call edges breadth-first, inbound or outbound, to a clamped depth of five.
+- `watch.rs` polls on an interval; an unchanged tree costs one `stat` per file and no parse, which is why this needs no filesystem-event dependency.
+- `projects.rs` records which repositories have a graph, so one agent can ask what it has indexed without a shared database that two checkouts would fight over.
+- `lsp.rs` speaks LSP over a child process's stdio, with no async runtime and no protocol crate. It is the second half of hybrid resolution: the static pass answers what it can, and only the call sites it left open become requests. Every request carries a timeout, the pass carries a wall-clock budget, and a server that hangs or answers unusably three times is dropped for the rest of the run — an index must never depend on an external tool behaving.
+- `artifact.rs` compacts the graph with `VACUUM INTO`, drops its indexes, and zstd-compresses the result into the artifact a team commits. Format is detected by magic bytes rather than by extension, so an uncompressed artifact from an earlier version still opens.
+
+Source text is never copied into the index. Snippets are read back from the working tree by line range, so a stale index can return wrong line numbers but never stale code. Retrieval counters live beside the graph in `stats.json`. A portable artifact at `.forgeguard/memory/graph.db.zst` is what a team commits; a fresh checkout imports it and incremental indexing fills in the local diff.
+
 ## Gate policy
 
 - Required command failures always block.

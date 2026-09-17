@@ -209,6 +209,21 @@ pub const LANGUAGE_CAPABILITIES: &[LanguageCapability] = &[
     structural("R"),
     parser_only("Elixir/Erlang"),
     parser_only("HCL/Terraform"),
+    parser_only("HTML"),
+    parser_only("CSS"),
+    parser_only("JSON"),
+    parser_only("YAML"),
+    parser_only("TOML"),
+    parser_only("Markdown"),
+    parser_only("OCaml"),
+    parser_only("Haskell"),
+    parser_only("Julia"),
+    parser_only("Perl"),
+    parser_only("Groovy"),
+    parser_only("Objective-C"),
+    parser_only("Verilog"),
+    parser_only("Svelte"),
+    parser_only("Make"),
 ];
 
 const fn capability(language: &'static str, semantic_pack: bool) -> LanguageCapability {

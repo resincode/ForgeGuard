@@ -254,6 +254,59 @@ fn parses_every_supported_language_without_fallback() {
 }
 
 #[test]
+fn parses_markup_config_and_extended_languages() {
+    let directory = tempdir().expect("temp directory");
+    let sources = [
+        ("page.html", "<!DOCTYPE html>\n<html><body><p>Hello</p></body></html>\n"),
+        ("app.css", ".app { color: #333; }\n"),
+        ("app.json", "{\"name\": \"app\", \"values\": [1, 2, 3]}\n"),
+        ("app.yaml", "name: app\nvalues:\n  - 1\n  - 2\n"),
+        ("app.toml", "[package]\nname = \"app\"\n"),
+        ("README.md", "# Title\n\nSome text.\n"),
+        ("app.ml", "let run values = List.iter print_int values\n"),
+        ("App.hs", "module App where\n\nrun :: [Int] -> IO ()\nrun = mapM_ print\n"),
+        ("app.jl", "function run(values)\n    for value in values\n        println(value)\n    end\nend\n"),
+        ("app.pl", "use strict;\nsub run { my @values = @_; print for @values; }\n"),
+        ("App.groovy", "class App {\n  void run() { }\n}\n"),
+        ("app.m", "#import <Foundation/Foundation.h>\n\nvoid run(int count) { NSLog(@\"%d\", count); }\n"),
+        ("counter.v", "module counter(input clk, output reg [7:0] q);\nalways @(posedge clk) q <= q + 1;\nendmodule\n"),
+        ("App.svelte", "<script>\n  let count = 0;\n</script>\n\n<p>{count}</p>\n"),
+        ("build.mk", "all: build\n\nbuild:\n\techo building\n"),
+    ];
+    for (name, source) in sources {
+        fs::write(directory.path().join(name), source).expect("write source");
+    }
+    // A file the scanner does not recognise never reaches a parser, so a syntax
+    // error reported here is what proves the extension routes to a grammar.
+    fs::write(
+        directory.path().join("broken.v"),
+        "module counter(\nendmodule\n",
+    )
+    .expect("write broken source");
+
+    let findings = scan_project(
+        directory.path(),
+        &ScanConfig::default(),
+        &ScanOptions::default(),
+    )
+    .expect("scan project");
+
+    for (name, _) in sources {
+        assert!(
+            !findings
+                .iter()
+                .any(|finding| finding.rule_id == "FG-PARSE-001"
+                    && finding.path.as_path() == std::path::Path::new(name)),
+            "{name} failed to parse"
+        );
+    }
+    assert!(findings
+        .iter()
+        .any(|finding| finding.rule_id == "FG-PARSE-001"
+            && finding.path.as_path() == std::path::Path::new("broken.v")));
+}
+
+#[test]
 fn detects_database_access_in_rust_go_and_python_loops() {
     let directory = tempdir().expect("temp directory");
     fs::write(

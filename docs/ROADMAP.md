@@ -39,6 +39,14 @@ This roadmap communicates direction, not a promise that every item will ship unc
 - Conservative same-operation duplicate hints with shared-domain evidence.
 - Reconciled ecosystem command presets for existing configs, dependency-change gating, content-fingerprint caching, persisted SBOM JSON, and configured-check SARIF results.
 
+## Shipped — Code memory
+
+- Persistent SQLite code graph built from the existing tree-sitter parsers, refreshed incrementally from file hashes or the Git diff.
+- Progressive retrieval under a byte budget: metadata, structure, snippet, whole file.
+- BM25 symbol search, a read-only Cypher-like query language, bounded call tracing, risk-scored diff impact, and an architecture summary with HTTP routes and cross-service edges.
+- Hybrid receiver-type resolution: a static pass, with an installed language server asked only about what it could not answer.
+- Compressed graph artifact a team can commit, a polling watcher, and a multi-repository registry.
+
 ## Next — Database and AI packs
 
 - Compiler-backed type/data-flow and complexity analysis.

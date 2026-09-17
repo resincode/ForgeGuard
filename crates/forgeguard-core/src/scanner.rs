@@ -242,7 +242,7 @@ fn apply_inline_suppressions(source: &str, findings: &mut Vec<Finding>) {
     });
 }
 
-fn collect_source_files(
+pub(crate) fn collect_source_files(
     root: &Path,
     config: &ScanConfig,
     options: &ScanOptions,
@@ -318,7 +318,7 @@ fn is_builtin_excluded(path: &Path) -> bool {
     })
 }
 
-fn is_test_path(path: &Path) -> bool {
+pub(crate) fn is_test_path(path: &Path) -> bool {
     let has_test_directory = path.components().any(|component| {
         matches!(
             component
@@ -339,6 +339,20 @@ fn is_test_path(path: &Path) -> bool {
         || file_name.ends_with("_test.rs")
         || file_name.contains(".test.")
         || file_name.contains(".spec.")
+}
+
+/// Markup, data, and documentation files parse, but they hold no executable
+/// lines, so a change to one never demands test coverage.
+pub(crate) fn is_markup_or_data(path: &Path) -> bool {
+    matches!(
+        path.extension().and_then(|value| value.to_str()),
+        Some("html" | "htm" | "css" | "json" | "yaml" | "yml" | "toml" | "md" | "markdown" | "mk")
+    )
+}
+
+/// Source whose changed lines a coverage report can be expected to cover.
+pub(crate) fn is_coverable_source(path: &Path) -> bool {
+    is_supported_source(path) && !is_markup_or_data(path)
 }
 
 pub(crate) fn is_supported_source(path: &Path) -> bool {
@@ -391,6 +405,28 @@ pub(crate) fn is_supported_source(path: &Path) -> bool {
                 | "vue"
                 | "svelte"
                 | "proto"
+                | "html"
+                | "htm"
+                | "css"
+                | "json"
+                | "yaml"
+                | "yml"
+                | "toml"
+                | "md"
+                | "markdown"
+                | "ml"
+                | "hs"
+                | "jl"
+                | "pl"
+                | "pm"
+                | "groovy"
+                | "gradle"
+                | "m"
+                | "mm"
+                | "v"
+                | "sv"
+                | "svh"
+                | "mk"
         )
     )
 }
@@ -1800,7 +1836,7 @@ fn route_has_access_control(source: &str, semantic: &SemanticIndex, path: &Path)
 }
 
 #[derive(Clone, Copy)]
-enum LanguageProfile {
+pub(crate) enum LanguageProfile {
     JavaScript,
     TypeScript,
     Tsx,
@@ -1825,10 +1861,26 @@ enum LanguageProfile {
     Erlang,
     RLang,
     Hcl,
+    Html,
+    Css,
+    Json,
+    Yaml,
+    Toml,
+    Markdown,
+    Ocaml,
+    Haskell,
+    Julia,
+    Perl,
+    Groovy,
+    ObjectiveC,
+    Verilog,
+    Svelte,
+    Make,
 }
 
 impl LanguageProfile {
-    fn family(self) -> &'static str {
+    // forgeguard: allow FG-CPLX-001 -- flat dispatch table over the parser matrix, one arm per language
+    pub(crate) fn family(self) -> &'static str {
         match self {
             Self::JavaScript | Self::TypeScript | Self::Tsx => "javascript",
             Self::Rust => "rust",
@@ -1852,6 +1904,21 @@ impl LanguageProfile {
             Self::Erlang => "erlang",
             Self::RLang => "r",
             Self::Hcl => "hcl",
+            Self::Html => "html",
+            Self::Css => "css",
+            Self::Json => "json",
+            Self::Yaml => "yaml",
+            Self::Toml => "toml",
+            Self::Markdown => "markdown",
+            Self::Ocaml => "ocaml",
+            Self::Haskell => "haskell",
+            Self::Julia => "julia",
+            Self::Perl => "perl",
+            Self::Groovy => "groovy",
+            Self::ObjectiveC => "objc",
+            Self::Verilog => "verilog",
+            Self::Svelte => "svelte",
+            Self::Make => "make",
         }
     }
 
@@ -1874,7 +1941,8 @@ impl LanguageProfile {
         }
     }
 
-    fn from_path(path: &Path) -> Option<Self> {
+    // forgeguard: allow FG-CPLX-001 -- flat dispatch table over the parser matrix, one arm per extension
+    pub(crate) fn from_path(path: &Path) -> Option<Self> {
         match path.extension()?.to_str()? {
             "js" | "jsx" | "mjs" | "cjs" => Some(Self::JavaScript),
             "ts" | "mts" | "cts" => Some(Self::TypeScript),
@@ -1900,11 +1968,28 @@ impl LanguageProfile {
             "erl" | "hrl" => Some(Self::Erlang),
             "r" => Some(Self::RLang),
             "tf" | "hcl" => Some(Self::Hcl),
+            "html" | "htm" => Some(Self::Html),
+            "css" => Some(Self::Css),
+            "json" => Some(Self::Json),
+            "yaml" | "yml" => Some(Self::Yaml),
+            "toml" => Some(Self::Toml),
+            "md" | "markdown" => Some(Self::Markdown),
+            // .mli needs the separate interface grammar, so only implementation files map here
+            "ml" => Some(Self::Ocaml),
+            "hs" => Some(Self::Haskell),
+            "jl" => Some(Self::Julia),
+            "pl" | "pm" => Some(Self::Perl),
+            "groovy" | "gradle" => Some(Self::Groovy),
+            "m" | "mm" => Some(Self::ObjectiveC),
+            "v" | "sv" | "svh" => Some(Self::Verilog),
+            "svelte" => Some(Self::Svelte),
+            "mk" => Some(Self::Make),
             _ => None,
         }
     }
 
-    fn language(self) -> Language {
+    // forgeguard: allow FG-CPLX-001 -- flat dispatch table over the parser matrix, one arm per grammar
+    pub(crate) fn language(self) -> Language {
         match self {
             Self::JavaScript => tree_sitter_javascript::LANGUAGE.into(),
             Self::TypeScript => tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
@@ -1930,9 +2015,25 @@ impl LanguageProfile {
             Self::Erlang => tree_sitter_erlang::LANGUAGE.into(),
             Self::RLang => tree_sitter_r::LANGUAGE.into(),
             Self::Hcl => tree_sitter_hcl::LANGUAGE.into(),
+            Self::Html => tree_sitter_html::LANGUAGE.into(),
+            Self::Css => tree_sitter_css::LANGUAGE.into(),
+            Self::Json => tree_sitter_json::LANGUAGE.into(),
+            Self::Yaml => tree_sitter_yaml::LANGUAGE.into(),
+            Self::Toml => tree_sitter_toml_ng::LANGUAGE.into(),
+            Self::Markdown => tree_sitter_md::LANGUAGE.into(),
+            Self::Ocaml => tree_sitter_ocaml::LANGUAGE_OCAML.into(),
+            Self::Haskell => tree_sitter_haskell::LANGUAGE.into(),
+            Self::Julia => tree_sitter_julia::LANGUAGE.into(),
+            Self::Perl => tree_sitter_perl::LANGUAGE.into(),
+            Self::Groovy => tree_sitter_groovy::LANGUAGE.into(),
+            Self::ObjectiveC => tree_sitter_objc::LANGUAGE.into(),
+            Self::Verilog => tree_sitter_verilog::LANGUAGE.into(),
+            Self::Svelte => tree_sitter_svelte_ng::LANGUAGE.into(),
+            Self::Make => tree_sitter_make::LANGUAGE.into(),
         }
     }
 
+    // forgeguard: allow FG-CPLX-001 -- flat dispatch table over the parser matrix, one arm per language
     fn is_loop(self, kind: &str) -> bool {
         match self {
             Self::JavaScript | Self::TypeScript | Self::Tsx => matches!(
@@ -1998,6 +2099,22 @@ impl LanguageProfile {
             Self::RLang => matches!(kind, "for" | "while_statement" | "for_statement" | "while"),
             // Functional/declarative grammars: no imperative loop nodes.
             Self::Elixir | Self::Erlang | Self::Hcl => false,
+            // Parser-only languages: no structural rules, so no loop node mapping.
+            Self::Html
+            | Self::Css
+            | Self::Json
+            | Self::Yaml
+            | Self::Toml
+            | Self::Markdown
+            | Self::Ocaml
+            | Self::Haskell
+            | Self::Julia
+            | Self::Perl
+            | Self::Groovy
+            | Self::ObjectiveC
+            | Self::Verilog
+            | Self::Svelte
+            | Self::Make => false,
         }
     }
 
@@ -2023,7 +2140,22 @@ impl LanguageProfile {
             | Self::Elixir
             | Self::Erlang
             | Self::RLang
-            | Self::Hcl => false,
+            | Self::Hcl
+            | Self::Html
+            | Self::Css
+            | Self::Json
+            | Self::Yaml
+            | Self::Toml
+            | Self::Markdown
+            | Self::Ocaml
+            | Self::Haskell
+            | Self::Julia
+            | Self::Perl
+            | Self::Groovy
+            | Self::ObjectiveC
+            | Self::Verilog
+            | Self::Svelte
+            | Self::Make => false,
         }
     }
 
@@ -2050,7 +2182,22 @@ impl LanguageProfile {
             | Self::Elixir
             | Self::Erlang
             | Self::RLang
-            | Self::Hcl => false,
+            | Self::Hcl
+            | Self::Html
+            | Self::Css
+            | Self::Json
+            | Self::Yaml
+            | Self::Toml
+            | Self::Markdown
+            | Self::Ocaml
+            | Self::Haskell
+            | Self::Julia
+            | Self::Perl
+            | Self::Groovy
+            | Self::ObjectiveC
+            | Self::Verilog
+            | Self::Svelte
+            | Self::Make => false,
         }
     }
 

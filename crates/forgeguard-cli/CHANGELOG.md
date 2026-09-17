@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+
+### Features
+
+* add a reproducible paired DeepSWE benchmark for measuring Codex with and without ForgeGuard
+
+### Bug Fixes
+
+* reject unsafe benchmark release tags and job names before constructing commands or output paths
+* pin Pier, Codex CLI, and the DeepSWE dataset revision used by benchmark runs
+
+### Continuous Integration
+
+* run the DeepSWE benchmark harness regression tests in CI
+
 ## [0.15.0](https://github.com/suiflex/ForgeGuard/compare/v0.14.0...v0.15.0) (2026-08-29)
 
 

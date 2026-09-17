@@ -275,6 +275,17 @@ impl ForgeGuardConfig {
         Self::load_from_path(&root.join(CONFIG_FILE))
     }
 
+    /// Scan settings for a repository that may not be initialized. The memory
+    /// layer runs before `forgeguard init` has necessarily been used, so it
+    /// needs the project's excludes and size limits when they exist and the
+    /// defaults when they do not.
+    pub fn scan_settings(root: &Path) -> Result<ScanConfig> {
+        if root.join(CONFIG_FILE).exists() {
+            return Ok(Self::load(root)?.scan);
+        }
+        Ok(ScanConfig::default())
+    }
+
     pub fn save(&self, root: &Path) -> Result<()> {
         self.save_to_path(&root.join(CONFIG_FILE))
     }

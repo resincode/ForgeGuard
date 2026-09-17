@@ -8,15 +8,20 @@ use std::{
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
 use forgeguard_core::{
+    analyze_impact, architecture, available_servers,
     config::{ForgeGuardConfig, UpdatePolicy, CONFIG_FILE},
-    create_baseline_with_config, detect_installed_agents, detect_project, evaluate_context_hook,
-    evaluate_scope_hook, evaluate_stop_hook, initialize_global, initialize_project,
-    is_general_hook_invocation, mark_task_ready_with_evidence, render_context_hook,
-    render_hook_decision, render_scope_warning,
+    create_baseline_with_config, delete_project, detect_installed_agents, detect_project,
+    evaluate_context_hook, evaluate_scope_hook, evaluate_stop_hook, export_artifact, find_symbols,
+    index_repository, index_status, initialize_global, initialize_project,
+    is_general_hook_invocation, list_projects, mark_task_ready_with_evidence,
+    memory::{refresh_changed, run_query, search_symbols},
+    render_context_hook, render_hook_decision, render_scope_warning,
     report::{render_detection, render_doctor, render_gate, render_gate_compact, render_sarif},
-    run_changed_gate, run_doctor, run_gate, start_task_with_profile, task_state, update_task_todos,
-    AgentTarget, GateOptions, GateReport, GateStatus, GoalContract, GuardMode, HookAgent,
-    HookDecision, InitOptions, TaskProfile, BASELINE_FILE, LANGUAGE_CAPABILITIES, RULES,
+    run_changed_gate, run_doctor, run_gate, start_task_with_profile, symbol_card, task_state,
+    trace_path, update_task_todos, watch_repository, AgentTarget, Detail, Direction, GateOptions,
+    GateReport, GateStatus, GoalContract, GuardMode, HookAgent, HookDecision, IndexOptions,
+    InitOptions, LspOptions, MemoryStats, RetrievalOptions, Store, TaskProfile, WatchOptions,
+    ARTIFACT_FILE, BASELINE_FILE, BEST_LEVEL, FAST_LEVEL, LANGUAGE_CAPABILITIES, RULES,
 };
 
 mod mcp;
@@ -153,6 +158,151 @@ enum Commands {
         #[command(subcommand)]
         command: McpCommands,
     },
+    /// Query the persistent code graph instead of re-reading source files.
+    ///
+    /// Every subcommand prints JSON: the caller is normally an agent.
+    Memory {
+        #[command(subcommand)]
+        command: MemoryCommands,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum MemoryCommands {
+    /// Build or refresh the index. Unchanged files are not reparsed.
+    Index {
+        /// Reparse every file, ignoring cached hashes.
+        #[arg(long)]
+        force: bool,
+        /// Ask installed language servers about call sites the static pass could
+        /// not attribute to a type. Needs the servers on PATH; costs seconds.
+        #[arg(long)]
+        lsp: bool,
+        /// Wall-clock budget for the language-server pass, in seconds.
+        #[arg(long, default_value_t = 30, requires = "lsp")]
+        lsp_budget: u64,
+        /// Per-request timeout, in seconds. A cold server indexing a large
+        /// workspace answers its first request slowly.
+        #[arg(long, default_value_t = 10, requires = "lsp")]
+        lsp_timeout: u64,
+        /// Index only what Git reports as changed.
+        #[arg(long, conflicts_with = "force")]
+        changed: bool,
+        /// Git revision to compare against when --changed is set.
+        #[arg(long, requires = "changed")]
+        base: Option<String>,
+    },
+    /// Find symbols by exact name, qualified name, or substring.
+    Find {
+        query: String,
+        #[arg(long, default_value_t = 20)]
+        limit: usize,
+    },
+    /// Retrieve one symbol at the requested level of detail.
+    Symbol {
+        query: String,
+        #[arg(long, value_enum, default_value = "structure")]
+        detail: DetailArg,
+        /// Maximum source bytes to return; source is dropped, not truncated.
+        #[arg(long, default_value_t = 8192)]
+        max_bytes: usize,
+    },
+    /// Rank symbols by BM25 over name, signature, and path.
+    Search {
+        query: String,
+        #[arg(long, default_value_t = 20)]
+        limit: usize,
+    },
+    /// Walk the call chain: who reaches a symbol and what it reaches.
+    Trace {
+        query: String,
+        #[arg(long, value_enum, default_value = "both")]
+        direction: DirectionArg,
+        /// Hops to follow, 1 to 5.
+        #[arg(long, default_value_t = 2)]
+        depth: usize,
+    },
+    /// Run a read-only Cypher-like query over the graph.
+    Query {
+        query: String,
+        #[arg(long, default_value_t = 100)]
+        limit: usize,
+    },
+    /// Map a Git diff to changed symbols, callers, dependents, tests, and risk.
+    Impact {
+        #[arg(long)]
+        base: Option<String>,
+    },
+    /// Summarise modules, layers, entry points, routes, and dependencies.
+    Architecture,
+    /// Report what the memory layer indexed, answered, and avoided reading.
+    Stats,
+    /// List repositories with an index on this machine.
+    Projects,
+    /// Report whether this repository's index exists and matches HEAD.
+    Status,
+    /// Delete this repository's index. Source files are never touched.
+    Delete {
+        /// Required: deleting an index cannot be undone without a re-index.
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Re-index on an interval until interrupted.
+    Watch {
+        #[arg(long, default_value_t = 5)]
+        interval: u64,
+        /// Stop after this many ticks instead of running until interrupted.
+        #[arg(long)]
+        iterations: Option<usize>,
+    },
+    /// Write the shareable graph artifact teammates can commit.
+    Export {
+        #[arg(long)]
+        output: Option<PathBuf>,
+        /// Compress for size (9) instead of speed (3).
+        #[arg(long, default_value_t = true)]
+        best: bool,
+    },
+    /// List the language servers ForgeGuard knows about and found on PATH.
+    Servers,
+    /// Load a committed graph artifact into the local cache.
+    Import,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum DirectionArg {
+    Inbound,
+    Outbound,
+    Both,
+}
+
+impl From<DirectionArg> for Direction {
+    fn from(value: DirectionArg) -> Self {
+        match value {
+            DirectionArg::Inbound => Self::Inbound,
+            DirectionArg::Outbound => Self::Outbound,
+            DirectionArg::Both => Self::Both,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum DetailArg {
+    Metadata,
+    Structure,
+    Snippet,
+    Full,
+}
+
+impl From<DetailArg> for Detail {
+    fn from(value: DetailArg) -> Self {
+        match value {
+            DetailArg::Metadata => Self::Metadata,
+            DetailArg::Structure => Self::Structure,
+            DetailArg::Snippet => Self::Snippet,
+            DetailArg::Full => Self::Full,
+        }
+    }
 }
 
 #[derive(Debug, Subcommand)]
@@ -685,7 +835,165 @@ fn execute() -> Result<ExitCode> {
                     force,
                 },
         } => mcp::register(&root, &client, project, dry_run, force).map(|()| ExitCode::SUCCESS),
+        Commands::Memory { command } => execute_memory(&root, command),
     }
+}
+
+// forgeguard: allow FG-CPLX-001 -- flat subcommand dispatcher; each arm is one call
+fn execute_memory(root: &Path, command: MemoryCommands) -> Result<ExitCode> {
+    let config = ForgeGuardConfig::scan_settings(root)?;
+    match command {
+        MemoryCommands::Index {
+            force,
+            lsp,
+            lsp_budget,
+            lsp_timeout,
+            changed,
+            base,
+        } => {
+            let report = if changed {
+                refresh_changed(root, &config, base.as_deref())?
+            } else {
+                index_repository(
+                    root,
+                    &config,
+                    &IndexOptions {
+                        force,
+                        paths: None,
+                        lsp: lsp.then(|| LspOptions {
+                            budget: std::time::Duration::from_secs(lsp_budget.max(1)),
+                            timeout: std::time::Duration::from_secs(lsp_timeout.max(1)),
+                            ..LspOptions::default()
+                        }),
+                    },
+                )?
+            };
+            print_json(&report)
+        }
+        MemoryCommands::Find { query, limit } => {
+            let store = load_memory(root)?;
+            print_json(&find_symbols(root, &store, &query, limit)?)
+        }
+        MemoryCommands::Search { query, limit } => {
+            let store = load_memory(root)?;
+            print_json(&search_symbols(root, &store, &query, limit)?)
+        }
+        MemoryCommands::Symbol {
+            query,
+            detail,
+            max_bytes,
+        } => {
+            let store = load_memory(root)?;
+            let options = RetrievalOptions {
+                detail: detail.into(),
+                max_bytes,
+            };
+            match symbol_card(root, &store, &query, &options)? {
+                Some(card) => print_json(&card),
+                None => {
+                    eprintln!("no indexed symbol matches {query}");
+                    Ok(ExitCode::FAILURE)
+                }
+            }
+        }
+        MemoryCommands::Trace {
+            query,
+            direction,
+            depth,
+        } => {
+            let store = load_memory(root)?;
+            match trace_path(root, &store, &query, direction.into(), depth)? {
+                Some(report) => print_json(&report),
+                None => {
+                    eprintln!("no indexed symbol matches {query}");
+                    Ok(ExitCode::FAILURE)
+                }
+            }
+        }
+        MemoryCommands::Query { query, limit } => {
+            let store = load_memory(root)?;
+            print_json(&run_query(root, &store, &query, limit)?)
+        }
+        MemoryCommands::Impact { base } => {
+            let store = load_memory(root)?;
+            print_json(&analyze_impact(root, &store, base.as_deref())?)
+        }
+        MemoryCommands::Architecture => {
+            let store = load_memory(root)?;
+            print_json(&architecture(root, &store)?)
+        }
+        MemoryCommands::Stats => print_json(&MemoryStats::load(root)),
+        MemoryCommands::Projects => print_json(&list_projects()?),
+        MemoryCommands::Status => print_json(&index_status(root)?),
+        MemoryCommands::Delete { yes } => {
+            if !yes {
+                bail!("pass --yes to delete the index for {}", root.display());
+            }
+            print_json(&serde_json::json!({ "deleted": delete_project(root)? }))
+        }
+        MemoryCommands::Watch {
+            interval,
+            iterations,
+        } => {
+            let options = WatchOptions {
+                interval: std::time::Duration::from_secs(interval.max(1)),
+                iterations,
+                base: None,
+            };
+            // One JSON object per changed tick keeps the stream parseable by a
+            // harness that is tailing it.
+            watch_repository(root, &config, &options, |tick| {
+                if tick.changed {
+                    if let Ok(line) = serde_json::to_string(tick) {
+                        println!("{line}");
+                    }
+                }
+            })?;
+            Ok(ExitCode::SUCCESS)
+        }
+        MemoryCommands::Export { output, best } => {
+            let level = if best { BEST_LEVEL } else { FAST_LEVEL };
+            print_json(&export_artifact(root, output.as_deref(), level)?)
+        }
+        MemoryCommands::Servers => {
+            let servers = available_servers()
+                .iter()
+                .map(|server| {
+                    serde_json::json!({
+                        "family": server.family,
+                        "command": server.command,
+                        "args": server.args,
+                    })
+                })
+                .collect::<Vec<_>>();
+            print_json(&serde_json::json!({ "installed": servers }))
+        }
+        MemoryCommands::Import => {
+            let mut store = Store::open(root)?;
+            let imported = forgeguard_core::memory::import_artifact(root, &mut store)?;
+            if !imported {
+                bail!(
+                    "no graph artifact at {}",
+                    root.join(ARTIFACT_FILE).display()
+                );
+            }
+            let report = index_repository(root, &config, &IndexOptions::default())?;
+            print_json(&report)
+        }
+    }
+}
+
+fn load_memory(root: &Path) -> Result<Store> {
+    let store = Store::open(root)?;
+    if store.is_empty()? {
+        bail!("no code memory index; run `forgeguard memory index` first");
+    }
+    Ok(store)
+}
+
+fn print_json<T: serde::Serialize>(value: &T) -> Result<ExitCode> {
+    println!("{}", serde_json::to_string_pretty(value)?);
+    Ok(ExitCode::SUCCESS)
 }
 
 fn execute_update(

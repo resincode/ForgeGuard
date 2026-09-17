@@ -9,7 +9,7 @@ use crate::{
     config::ScanConfig,
     git::ChangedScope,
     model::{EvidenceConfidence, Finding, Severity},
-    scanner::is_supported_source,
+    scanner::is_coverable_source,
 };
 
 pub(crate) fn changed_coverage_finding(
@@ -21,7 +21,7 @@ pub(crate) fn changed_coverage_finding(
     else {
         return Ok(None);
     };
-    if !scope.paths.iter().any(|path| is_supported_source(path)) {
+    if !scope.paths.iter().any(|path| is_coverable_source(path)) {
         return Ok(None);
     }
     let report_path = root.join(report);
