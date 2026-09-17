@@ -258,6 +258,19 @@ test -f "$scripted/.forgeguard/cache/memory/graph.db" || {
     exit 1
 }
 
+# `--agent all` has to reach every harness: the requested list is a single `all`
+# target, so registration reads the expanded list the installer reports.
+everything="${temporary_directory}/everything"
+mkdir -p "$everything"
+git -C "$everything" init -q
+"$binary" --root "$everything" init --agent all --mcp > /dev/null 2>&1
+for config in ".mcp.json" ".cursor/mcp.json" "opencode.json"; do
+    test -f "$everything/$config" || {
+        echo "error: --agent all did not register $config" >&2
+        exit 1
+    }
+done
+
 bare="${temporary_directory}/bare"
 mkdir -p "$bare"
 git -C "$bare" init -q

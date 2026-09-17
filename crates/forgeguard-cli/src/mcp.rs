@@ -8,7 +8,7 @@ use forgeguard_core::{
     analyze_impact, architecture,
     config::{ForgeGuardConfig, ScanConfig, CONFIG_FILE},
     delete_project, find_symbols, index_repository, index_status, list_projects,
-    memory::{refresh_changed, run_query, search_symbols},
+    memory::{ensure_current, run_query, search_symbols},
     run_changed_gate, run_doctor, run_gate, symbol_card, task_state, trace_path, AgentTarget,
     Detail, Direction, GateOptions, IndexOptions, LspOptions, MemoryStats, RetrievalOptions, Store,
 };
@@ -413,14 +413,7 @@ fn scan_config(root: &Path) -> Result<ScanConfig> {
 /// empty index is built, an existing one is refreshed from the Git diff. A
 /// refresh failure (no Git, for example) leaves the existing index in use.
 fn ensure_index(root: &Path) -> Result<Store> {
-    let config = scan_config(root)?;
-    let store = Store::open(root)?;
-    if store.is_empty()? {
-        index_repository(root, &config, &IndexOptions::default())?;
-    } else {
-        let _ = refresh_changed(root, &config, None);
-    }
-    Store::open(root)
+    ensure_current(root, &scan_config(root)?)
 }
 
 #[tool_handler(router = self.tool_router)]
@@ -551,10 +544,12 @@ pub fn register_agents(root: &Path, agents: &[AgentTarget], quiet: bool) -> Vec<
         };
         match kurir::register(harness, &spec, &options) {
             Ok(result) => {
+                // Git reads `\` in a pattern as an escape, so a Windows path has
+                // to reach `.gitignore` with forward slashes.
                 let relative = result.target.as_ref().and_then(|path| {
                     path.strip_prefix(root)
                         .ok()
-                        .map(|path| path.display().to_string())
+                        .map(|path| path.to_string_lossy().replace('\\', "/"))
                 });
                 if !quiet {
                     match result.action.as_str() {

@@ -14,7 +14,7 @@ use forgeguard_core::{
     evaluate_context_hook, evaluate_scope_hook, evaluate_stop_hook, export_artifact, find_symbols,
     index_repository, index_status, initialize_global, initialize_project,
     is_general_hook_invocation, list_projects, mark_task_ready_with_evidence,
-    memory::{refresh_changed, run_query, search_symbols},
+    memory::{ensure_current, refresh_changed, run_query, search_symbols},
     render_context_hook, render_hook_decision, render_scope_warning,
     report::{render_detection, render_doctor, render_gate, render_gate_compact, render_sarif},
     run_changed_gate, run_doctor, run_gate, start_task_with_profile, symbol_card, task_state,
@@ -646,8 +646,10 @@ fn execute() -> Result<ExitCode> {
                 // Registered per repository on purpose: one global entry would
                 // point every checkout at whichever directory the harness
                 // happened to start in, and each repository owns its own graph.
+                // `report.agents` rather than the requested list: `initialize_project`
+                // has already expanded `--agent all` into concrete targets.
                 let mcp_configs = if register_mcp {
-                    mcp::register_agents(&root, &agents, json)
+                    mcp::register_agents(&root, &report.agents, json)
                 } else {
                     Vec::new()
                 };
@@ -1029,19 +1031,11 @@ fn execute_memory(root: &Path, command: MemoryCommands) -> Result<ExitCode> {
     }
 }
 
-/// Answer from a graph that matches the working tree: an empty index is built,
-/// an existing one is refreshed from the Git diff. This is what the MCP surface
-/// already does, so a CLI caller never reads a stale answer either. A refresh
-/// failure (no Git, for example) leaves the existing index in use.
+/// Answer from a graph that matches the working tree, the way the MCP surface
+/// already does, so a CLI caller never reads a stale answer either.
 fn load_memory(root: &Path) -> Result<Store> {
     let config = ForgeGuardConfig::scan_settings(root)?;
-    let store = Store::open(root)?;
-    if store.is_empty()? {
-        index_repository(root, &config, &IndexOptions::default())?;
-    } else {
-        let _ = refresh_changed(root, &config, None);
-    }
-    let store = Store::open(root)?;
+    let store = ensure_current(root, &config)?;
     if store.is_empty()? {
         bail!("no code memory index; run `forgeguard memory index` first");
     }

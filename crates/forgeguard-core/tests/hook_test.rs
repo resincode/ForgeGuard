@@ -1550,3 +1550,29 @@ fn git_init(root: &std::path::Path) {
         .expect("run git init");
     assert!(status.success());
 }
+
+#[test]
+fn ignoring_paths_treats_a_leading_slash_as_the_same_entry() {
+    let directory = tempdir().expect("temp directory");
+    fs::write(directory.path().join(".gitignore"), "/.mcp.json\n").expect("write gitignore");
+
+    forgeguard_core::ignore_repository_paths(
+        directory.path(),
+        &[".mcp.json".to_owned(), ".cursor/mcp.json".to_owned()],
+    )
+    .expect("ignore paths");
+
+    let content = fs::read_to_string(directory.path().join(".gitignore")).expect("read gitignore");
+    assert_eq!(content.matches("/.mcp.json").count(), 1, "{content}");
+    assert!(content.contains(".cursor/mcp.json"), "{content}");
+}
+
+#[test]
+fn ignoring_paths_leaves_a_repository_without_a_gitignore_alone() {
+    let directory = tempdir().expect("temp directory");
+
+    forgeguard_core::ignore_repository_paths(directory.path(), &[".mcp.json".to_owned()])
+        .expect("ignore paths");
+
+    assert!(!directory.path().join(".gitignore").exists());
+}

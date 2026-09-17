@@ -1132,10 +1132,12 @@ pub fn ignore_repository_paths(root: &Path, entries: &[String]) -> Result<()> {
     let mut updated = fs::read_to_string(&root_ignore).unwrap_or_default();
     let mut changed = false;
     for entry in entries {
-        let wanted = entry.trim_end_matches('/');
+        // `/.mcp.json` and `.mcp.json/` name the same path as `.mcp.json`, so
+        // an existing entry in either form must not gain a duplicate.
+        let wanted = entry.trim_matches('/');
         if updated
             .lines()
-            .any(|line| line.trim().trim_end_matches('/') == wanted)
+            .any(|line| line.trim().trim_matches('/') == wanted)
         {
             continue;
         }
