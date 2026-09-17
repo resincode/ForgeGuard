@@ -14,7 +14,7 @@ use forgeguard_core::{
     evaluate_context_hook, evaluate_scope_hook, evaluate_stop_hook, export_artifact, find_symbols,
     index_repository, index_status, initialize_global, initialize_project,
     is_general_hook_invocation, list_projects, mark_task_ready_with_evidence,
-    memory::{refresh_changed, run_query, search_symbols},
+    memory::{ensure_current, refresh_changed, run_query, search_symbols},
     render_context_hook, render_hook_decision, render_scope_warning,
     report::{render_detection, render_doctor, render_gate, render_gate_compact, render_sarif},
     run_changed_gate, run_doctor, run_gate, start_task_with_profile, symbol_card, task_state,
@@ -63,6 +63,18 @@ enum Commands {
         /// already configured in the target directory.
         #[arg(long, value_enum, value_delimiter = ',')]
         agent: Vec<AgentArg>,
+        /// Build the code graph after installing. The wizard asks; this is how a
+        /// script or CI run answers. `--no-index` declines it.
+        #[arg(long, overrides_with = "no_index")]
+        index: bool,
+        #[arg(long = "no-index", overrides_with = "index")]
+        no_index: bool,
+        /// Register `forgeguard mcp serve` in this repository for the installed
+        /// agents. `--no-mcp` declines it.
+        #[arg(long, overrides_with = "no_mcp")]
+        mcp: bool,
+        #[arg(long = "no-mcp", overrides_with = "mcp")]
+        no_mcp: bool,
         #[arg(long)]
         json: bool,
     },
@@ -545,15 +557,23 @@ fn execute() -> Result<ExitCode> {
             refresh,
             global,
             agent,
+            index,
+            no_index,
+            mcp,
+            no_mcp,
             json,
         } => {
+            // A flag answers the question the wizard would have asked, so a
+            // scripted install reaches the same state as an interactive one.
+            let index_flag = flag_choice(index, no_index);
+            let mcp_flag = flag_choice(mcp, no_mcp);
             // Interactive wizard only when nothing was specified and we own a
             // terminal. Explicit `--agent` always wins and is never second-guessed,
             // so existing scripts keep working unchanged.
             let interactive =
                 agent.is_empty() && !global && !json && std::io::stdout().is_terminal();
-            let (use_global, agents, add_gitignore) = if interactive {
-                run_init_wizard(&root)?
+            let mut choices = if interactive {
+                run_init_wizard(&root, index_flag, mcp_flag)?
             } else if agent.is_empty() {
                 // Nothing specified and nothing to prompt: install for the agents
                 // this directory already uses rather than writing every
@@ -567,18 +587,25 @@ fn execute() -> Result<ExitCode> {
                 if detected.is_empty() {
                     return no_agent_detected(json);
                 }
-                (global, detected, false)
+                WizardChoices::plain(global, detected)
             } else {
-                (
-                    global,
-                    agent.into_iter().map(AgentTarget::from).collect(),
-                    false,
-                )
+                WizardChoices::plain(global, agent.into_iter().map(AgentTarget::from).collect())
             };
+            if !interactive && !choices.use_global {
+                choices.index_now = index_flag.unwrap_or(false);
+                choices.register_mcp = mcp_flag.unwrap_or(false);
+            }
+            let WizardChoices {
+                use_global,
+                agents,
+                add_gitignore,
+                index_now,
+                register_mcp,
+            } = choices;
             let options = InitOptions {
                 force,
                 refresh,
-                agents,
+                agents: agents.clone(),
             };
             if use_global {
                 let home = home_directory()?;
@@ -616,8 +643,26 @@ fn execute() -> Result<ExitCode> {
                 }
             } else {
                 let report = initialize_project(&root, &options)?;
+                // Registered per repository on purpose: one global entry would
+                // point every checkout at whichever directory the harness
+                // happened to start in, and each repository owns its own graph.
+                // `report.agents` rather than the requested list: `initialize_project`
+                // has already expanded `--agent all` into concrete targets.
+                let mcp_configs = if register_mcp {
+                    mcp::register_agents(&root, &report.agents, json)
+                } else {
+                    Vec::new()
+                };
                 if add_gitignore {
+                    // The prompt was answered yes, so a repository without a
+                    // `.gitignore` gets one rather than silently committing the
+                    // generated configuration.
+                    let ignore = root.join(".gitignore");
+                    if !ignore.exists() {
+                        std::fs::write(&ignore, "")?;
+                    }
                     forgeguard_core::ignore_forgeguard_artifacts(&root)?;
+                    forgeguard_core::ignore_repository_paths(&root, &mcp_configs)?;
                 }
                 if json {
                     println!("{}", serde_json::to_string_pretty(&report)?);
@@ -652,6 +697,9 @@ fn execute() -> Result<ExitCode> {
                     if io::stdin().is_terminal() {
                         configure_mode_interactive(&root)?;
                     }
+                }
+                if index_now {
+                    build_initial_memory(&root, json)?;
                 }
             }
             if !json {
@@ -983,8 +1031,11 @@ fn execute_memory(root: &Path, command: MemoryCommands) -> Result<ExitCode> {
     }
 }
 
+/// Answer from a graph that matches the working tree, the way the MCP surface
+/// already does, so a CLI caller never reads a stale answer either.
 fn load_memory(root: &Path) -> Result<Store> {
-    let store = Store::open(root)?;
+    let config = ForgeGuardConfig::scan_settings(root)?;
+    let store = ensure_current(root, &config)?;
     if store.is_empty()? {
         bail!("no code memory index; run `forgeguard memory index` first");
     }
@@ -1562,7 +1613,52 @@ const AGENT_SUMMARY: &[(&str, &str)] = &[
 const SCOPE_PROJECT: &str = "This repository";
 const SCOPE_GLOBAL: &str = "Global (user directory)";
 
-fn run_init_wizard(root: &Path) -> Result<(bool, Vec<AgentTarget>, bool)> {
+/// What the install has to do, whether it came from the wizard or from flags.
+struct WizardChoices {
+    use_global: bool,
+    agents: Vec<AgentTarget>,
+    add_gitignore: bool,
+    index_now: bool,
+    register_mcp: bool,
+}
+
+impl WizardChoices {
+    /// Flags decided everything: install and nothing else, so scripts and CI
+    /// keep the behaviour they had before the wizard asked these questions.
+    fn plain(use_global: bool, agents: Vec<AgentTarget>) -> Self {
+        Self {
+            use_global,
+            agents,
+            add_gitignore: false,
+            index_now: false,
+            register_mcp: false,
+        }
+    }
+}
+
+/// `--index`/`--no-index` style pairs: a flag answers, nothing leaves it open.
+const fn flag_choice(yes: bool, no: bool) -> Option<bool> {
+    match (yes, no) {
+        (true, _) => Some(true),
+        (_, true) => Some(false),
+        _ => None,
+    }
+}
+
+fn confirm(question: &str, help: &str) -> Result<bool> {
+    inquire::Confirm::new(question)
+        .with_default(true)
+        .with_help_message(help)
+        .with_render_config(theme::render_config())
+        .prompt()
+        .context("init wizard cancelled")
+}
+
+fn run_init_wizard(
+    root: &Path,
+    index_flag: Option<bool>,
+    mcp_flag: Option<bool>,
+) -> Result<WizardChoices> {
     println!("{}\n", theme::banner());
 
     let scope = inquire::Select::new(
@@ -1612,8 +1708,59 @@ fn run_init_wizard(root: &Path) -> Result<(bool, Vec<AgentTarget>, bool)> {
             .context("init wizard cancelled")?
     };
 
+    // Only a project checkout has code to index, and the graph is what lets an
+    // agent ask for a symbol instead of reading whole files.
+    let (index_now, register_mcp) = if use_global {
+        (false, false)
+    } else {
+        let index_now = match index_flag {
+            Some(answer) => answer,
+            None => confirm(
+                "Build the code memory index now?",
+                "lets agents query symbols instead of reading files",
+            )?,
+        };
+        let register_mcp = match mcp_flag {
+            Some(answer) => answer,
+            None => confirm(
+                "Register the ForgeGuard MCP server here?",
+                "writes this repository's MCP config for the agents you picked",
+            )?,
+        };
+        (index_now, register_mcp)
+    };
+
     println!();
-    Ok((use_global, agents, add_gitignore))
+    Ok(WizardChoices {
+        use_global,
+        agents,
+        add_gitignore,
+        index_now,
+        register_mcp,
+    })
+}
+
+/// Build the code graph right after install, so the first agent session can
+/// query symbols instead of paying to read files.
+fn build_initial_memory(root: &Path, quiet: bool) -> Result<()> {
+    let config = ForgeGuardConfig::scan_settings(root)?;
+    if quiet {
+        index_repository(root, &config, &IndexOptions::default())?;
+        return Ok(());
+    }
+    println!("{}", theme::point("indexing code memory…", theme::ACCENT));
+    let report = index_repository(root, &config, &IndexOptions::default())?;
+    println!(
+        "{}",
+        theme::point(
+            &format!(
+                "indexed {} symbols across {} files in {}ms",
+                report.symbols, report.files, report.duration_millis
+            ),
+            theme::ACCENT,
+        )
+    );
+    Ok(())
 }
 
 /// Ask which agents to install for, with the ones already configured under

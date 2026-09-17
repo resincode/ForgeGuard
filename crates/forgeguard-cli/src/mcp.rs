@@ -8,9 +8,9 @@ use forgeguard_core::{
     analyze_impact, architecture,
     config::{ForgeGuardConfig, ScanConfig, CONFIG_FILE},
     delete_project, find_symbols, index_repository, index_status, list_projects,
-    memory::{refresh_changed, run_query, search_symbols},
-    run_changed_gate, run_doctor, run_gate, symbol_card, task_state, trace_path, Detail, Direction,
-    GateOptions, IndexOptions, LspOptions, MemoryStats, RetrievalOptions, Store,
+    memory::{ensure_current, run_query, search_symbols},
+    run_changed_gate, run_doctor, run_gate, symbol_card, task_state, trace_path, AgentTarget,
+    Detail, Direction, GateOptions, IndexOptions, LspOptions, MemoryStats, RetrievalOptions, Store,
 };
 use kurir::{Harness, RegistrationOptions, Scope, ServerSpec};
 use rmcp::{
@@ -413,14 +413,7 @@ fn scan_config(root: &Path) -> Result<ScanConfig> {
 /// empty index is built, an existing one is refreshed from the Git diff. A
 /// refresh failure (no Git, for example) leaves the existing index in use.
 fn ensure_index(root: &Path) -> Result<Store> {
-    let config = scan_config(root)?;
-    let store = Store::open(root)?;
-    if store.is_empty()? {
-        index_repository(root, &config, &IndexOptions::default())?;
-    } else {
-        let _ = refresh_changed(root, &config, None);
-    }
-    Store::open(root)
+    ensure_current(root, &scan_config(root)?)
 }
 
 #[tool_handler(router = self.tool_router)]
@@ -494,6 +487,92 @@ pub fn register(
         _ => {}
     }
     Ok(())
+}
+
+/// Harness ids that keep their MCP configuration inside the repository. A
+/// harness registered through its own CLI lands in a user-wide file, which is
+/// the wrong shape here: every checkout has its own code graph, so the entry
+/// has to sit next to the code it describes.
+const fn project_harness(agent: AgentTarget) -> Option<&'static str> {
+    match agent {
+        AgentTarget::Claude => Some("claude-code"),
+        AgentTarget::Cursor => Some("cursor"),
+        AgentTarget::OpenCode => Some("opencode"),
+        AgentTarget::OpenClaw => Some("openclaw"),
+        AgentTarget::Antigravity => Some("antigravity-cli"),
+        _ => None,
+    }
+}
+
+/// Harnesses whose MCP entry only exists user-wide. They are named in a hint
+/// rather than registered, because one entry would serve every repository.
+const fn user_wide_harness(agent: AgentTarget) -> Option<&'static str> {
+    match agent {
+        AgentTarget::Codex => Some("codex"),
+        AgentTarget::Hermes => Some("hermes"),
+        AgentTarget::Windsurf => Some("windsurf"),
+        AgentTarget::Copilot => Some("copilot-cli"),
+        _ => None,
+    }
+}
+
+/// Register `forgeguard mcp serve` for the agents `init` installed, in this
+/// repository only. Best effort: a harness that cannot be written is reported
+/// and skipped, because a failed registration must not fail the install.
+/// Returns the repository-relative config paths that were touched.
+pub fn register_agents(root: &Path, agents: &[AgentTarget], quiet: bool) -> Vec<String> {
+    let spec = server_spec();
+    let mut written = Vec::new();
+    for agent in agents {
+        let Some(id) = project_harness(*agent) else {
+            // Nothing to write here, but silence would look like success: the
+            // agent is installed and its MCP entry is not.
+            if let (false, Some(client)) = (quiet, user_wide_harness(*agent)) {
+                println!(
+                    "  MCP for {client} is user-wide, not per repository: run `forgeguard mcp register --client {client}` to add it"
+                );
+            }
+            continue;
+        };
+        let Ok(harness) = id.parse::<Harness>() else {
+            continue;
+        };
+        let options = RegistrationOptions {
+            scope: Scope::Project,
+            cwd: root.to_path_buf(),
+            ..RegistrationOptions::default()
+        };
+        match kurir::register(harness, &spec, &options) {
+            Ok(result) => {
+                // Git reads `\` in a pattern as an escape, so a Windows path has
+                // to reach `.gitignore` with forward slashes.
+                let relative = result.target.as_ref().and_then(|path| {
+                    path.strip_prefix(root)
+                        .ok()
+                        .map(|path| path.to_string_lossy().replace('\\', "/"))
+                });
+                if !quiet {
+                    match result.action.as_str() {
+                        "registered" => println!(
+                            "  MCP registered for {id} in {}",
+                            relative.clone().unwrap_or_else(|| id.to_owned())
+                        ),
+                        "already-configured" => println!("  MCP already registered for {id}"),
+                        _ => {}
+                    }
+                }
+                if let Some(relative) = relative {
+                    written.push(relative);
+                }
+            }
+            Err(error) => {
+                if !quiet {
+                    eprintln!("  MCP registration skipped for {id}: {error}");
+                }
+            }
+        }
+    }
+    written
 }
 
 fn server_spec() -> ServerSpec {

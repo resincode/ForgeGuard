@@ -282,6 +282,21 @@ pub struct LspReport {
     pub servers: Vec<String>,
 }
 
+/// Open a graph that matches the working tree: an empty index is built, an
+/// existing one is refreshed from the Git diff. A refresh failure (no Git, for
+/// example) leaves the existing index in use, because a stale answer beats no
+/// answer. Callers that must not answer from an empty graph check
+/// [`Store::is_empty`] on the result.
+pub fn ensure_current(root: &Path, config: &ScanConfig) -> Result<Store> {
+    let store = Store::open(root)?;
+    if store.is_empty()? {
+        index_repository(root, config, &IndexOptions::default())?;
+    } else {
+        let _ = refresh_changed(root, config, None);
+    }
+    Store::open(root)
+}
+
 /// Build or refresh the index. Files whose size, mtime, and content hash are
 /// unchanged are carried over untouched; everything else is reparsed.
 pub fn index_repository(

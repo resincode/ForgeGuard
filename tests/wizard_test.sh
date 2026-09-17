@@ -71,15 +71,21 @@ project="${temporary_directory}/project"
 mkdir -p "$project/.claude" "$project/.cursor"
 git -C "$project" init -q
 
-# Enter x4: accept "This repository", accept the pre-selected agents, accept the
-# gitignore prompt, accept the mode prompt.
+# Enter x6: accept "This repository", accept the pre-selected agents, accept the
+# gitignore prompt, accept the memory index prompt, accept the MCP prompt,
+# accept the mode prompt.
+printf '/node_modules/\n' > "$project/.gitignore"
 transcript="${temporary_directory}/transcript"
 {
     sleep 0.6; printf '\r'
     sleep 0.6; printf '\r'
     sleep 0.6; printf '\r'
     sleep 0.6; printf '\r'
-    sleep 1.2
+    sleep 0.6; printf '\r'
+    sleep 0.6; printf '\r'
+    # Closing stdin ends the PTY session and kills the child, so hold it open
+    # long enough for the registration and the index to finish printing.
+    sleep 3
 } | run_on_pty "$binary" --root "$project" init > "$transcript" 2>&1 || true
 strip_ansi < "$transcript" > "${transcript}.plain"
 
@@ -120,6 +126,41 @@ assert_contains "grouped writes" ".claude/ ("
 test -f "$project/CLAUDE.md" || { echo "error: CLAUDE.md missing" >&2; exit 1; }
 test -f "$project/.cursor/rules/forgeguard.mdc" || { echo "error: cursor rules missing" >&2; exit 1; }
 test ! -f "$project/AGENTS.md" || { echo "error: AGENTS.md written for an unselected agent" >&2; exit 1; }
+
+# Accepting the index prompt must leave a code graph behind, so the first agent
+# session can query symbols instead of reading files.
+assert_contains "index prompt" "Build the code memory index now?"
+assert_contains "index summary" "indexed"
+test -f "$project/.forgeguard/cache/memory/graph.db" || {
+    echo "error: memory index was accepted but no graph.db was written" >&2
+    cat "${transcript}.plain" >&2
+    exit 1
+}
+
+# The MCP server is registered per repository, once per selected agent, and the
+# generated config files are ignored rather than committed.
+assert_contains "mcp prompt" "Register the ForgeGuard MCP server here?"
+for config in ".mcp.json" ".cursor/mcp.json"; do
+    test -f "$project/$config" || {
+        echo "error: MCP config missing: $config" >&2
+        cat "${transcript}.plain" >&2
+        exit 1
+    }
+    if ! grep -qF "forgeguard" "$project/$config"; then
+        echo "error: $config has no forgeguard server entry" >&2
+        exit 1
+    fi
+    if ! grep -qF "$config" "$project/.gitignore"; then
+        echo "error: $config was not added to .gitignore" >&2
+        cat "$project/.gitignore" >&2
+        exit 1
+    fi
+done
+# An unselected agent must not be registered.
+test ! -f "$project/.agents/mcp_config.json" || {
+    echo "error: MCP registered for an unselected agent" >&2
+    exit 1
+}
 
 # A drifted ForgeGuard-owned file must be offered, not silently replaced. An
 # edited CLAUDE.md is the user's file: it is reported as kept, never offered.
@@ -203,5 +244,49 @@ for expected in "nothing selected" "pick at least one" "no agent selected"; do
         exit 1
     fi
 done
+
+# The flags answer the same questions without a terminal, and a run without them
+# keeps the old behaviour: install only.
+scripted="${temporary_directory}/scripted"
+mkdir -p "$scripted"
+git -C "$scripted" init -q
+printf 'pub fn scripted_marker() {}\n' > "$scripted/lib.rs"
+"$binary" --root "$scripted" init --agent claude --index --mcp > /dev/null 2>&1
+test -f "$scripted/.mcp.json" || { echo "error: --mcp did not register" >&2; exit 1; }
+test -f "$scripted/.forgeguard/cache/memory/graph.db" || {
+    echo "error: --index did not build the graph" >&2
+    exit 1
+}
+
+# `--agent all` has to reach every harness: the requested list is a single `all`
+# target, so registration reads the expanded list the installer reports.
+everything="${temporary_directory}/everything"
+mkdir -p "$everything"
+git -C "$everything" init -q
+"$binary" --root "$everything" init --agent all --mcp > /dev/null 2>&1
+for config in ".mcp.json" ".cursor/mcp.json" "opencode.json"; do
+    test -f "$everything/$config" || {
+        echo "error: --agent all did not register $config" >&2
+        exit 1
+    }
+done
+
+bare="${temporary_directory}/bare"
+mkdir -p "$bare"
+git -C "$bare" init -q
+"$binary" --root "$bare" init --agent claude > /dev/null 2>&1
+test ! -f "$bare/.mcp.json" || { echo "error: MCP registered without --mcp" >&2; exit 1; }
+test ! -f "$bare/.forgeguard/cache/memory/graph.db" || {
+    echo "error: index built without --index" >&2
+    exit 1
+}
+
+# A memory query refreshes the graph itself, so an edit made after the index is
+# visible without a manual re-index.
+printf 'pub fn added_after_index() {}\n' > "$scripted/added.rs"
+if ! "$binary" --root "$scripted" memory find added_after_index | grep -qF "added_after_index"; then
+    echo "error: memory find did not pick up a file added after the index" >&2
+    exit 1
+fi
 
 echo "wizard test passed"

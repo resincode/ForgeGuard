@@ -341,8 +341,33 @@ Global lifecycle hooks supervise General Guard only. Inside a repository initial
 
 When a project `.gitignore` already exists, `forgeguard init` appends the generated directories for
 the selected agents (`.codex/`, `.claude/`, `.cursor/`, and/or `.agents/`). It preserves existing
-patterns, avoids duplicate entries, and does not create a root `.gitignore`. The `AGENTS.md`-only
-targets add no directory, so they add no ignore entry.
+patterns, avoids duplicate entries, and adds the MCP configuration files it generated. The
+`AGENTS.md`-only targets add no directory, so they add no ignore entry. Answering yes to the
+wizard's `.gitignore` question in a repository that has none creates the file; nothing else does.
+
+## Code graph and MCP at install time
+
+After picking agents, the wizard asks two more questions, both defaulting to yes:
+
+- **Build the code memory index now?** runs the equivalent of `forgeguard memory index`, so the
+  first agent session queries symbols instead of reading whole files.
+- **Register the ForgeGuard MCP server here?** writes this repository's MCP configuration for the
+  agents just installed: `.mcp.json` (Claude Code), `.cursor/mcp.json`, `opencode.json`,
+  `openclaw.json`, `.agents/mcp_config.json` (Antigravity CLI). Registration is per repository on
+  purpose, because each checkout owns its own graph. Harnesses that only support a user-wide entry
+  (`codex`, `hermes`, `windsurf`, `copilot-cli`) are named in a hint instead of being registered;
+  add them with `forgeguard mcp register --client <harness>`.
+
+A scripted or CI install answers the same questions with flags, and does neither when they are
+absent:
+
+```bash
+forgeguard init --agent claude --index --mcp
+forgeguard init --agent claude --no-index --no-mcp
+```
+
+Memory queries keep themselves current: both the CLI and the MCP tools build an empty index on
+first use and refresh an existing one from the Git diff before answering.
 
 ## Choosing agents
 
