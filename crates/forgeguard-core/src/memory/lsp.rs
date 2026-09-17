@@ -183,6 +183,8 @@ pub struct LspStats {
     pub budget_skips: u64,
     /// Answers the client could not use: an error reply or an unparseable shape.
     pub protocol_errors: u64,
+    /// Servers whose output stream closed mid-run.
+    pub servers_lost: u64,
 }
 
 /// Why a request could not be answered. None of these reach the caller as an
@@ -192,6 +194,8 @@ enum Failure {
     /// No server for this family, or it could not be spawned or read.
     Missing,
     Timeout,
+    /// The server's output stream closed: it exited or was killed.
+    Dead,
     /// Malformed frame, error response, or a reply we cannot use.
     Protocol,
 }
@@ -373,6 +377,7 @@ impl LspResolver {
         match failure {
             Failure::Timeout => self.stats.timeouts += 1,
             Failure::Missing => self.stats.families_skipped += 1,
+            Failure::Dead => self.stats.servers_lost += 1,
             Failure::Protocol => {}
         }
         self.disabled.insert(family.to_owned());
@@ -497,7 +502,9 @@ impl Server {
             let message = match self.incoming.recv_timeout(remaining) {
                 Ok(message) => message,
                 Err(RecvTimeoutError::Timeout) => return Err(Failure::Timeout),
-                Err(RecvTimeoutError::Disconnected) => return Err(Failure::Protocol),
+                // The stream closed, so no later request can be answered either:
+                // this is a dead server, not an unanswerable question.
+                Err(RecvTimeoutError::Disconnected) => return Err(Failure::Dead),
             };
             // Progress notifications and server-initiated requests share the
             // stream; we answer none of them and wait for our own id.
@@ -1143,7 +1150,14 @@ done
             assert_eq!(resolver.receiver_at(&fixture.source(), "rust", 0, 12), None);
             assert_eq!(resolver.receiver_at(&fixture.source(), "rust", 0, 12), None);
             let stats = resolver.stats();
-            assert_eq!(stats.timeouts, 1);
+            // A server that never answers either holds the stream open until the
+            // timeout or closes it outright; which one depends on how the
+            // platform schedules the child, and both must disable the family.
+            assert_eq!(
+                stats.timeouts + stats.servers_lost,
+                1,
+                "silence must be recorded once: {stats:?}"
+            );
             // The second call was refused by the disabled family, not retried.
             assert_eq!(stats.requests, 1);
         }
