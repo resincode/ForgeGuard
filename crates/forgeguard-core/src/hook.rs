@@ -1117,20 +1117,37 @@ pub fn ignore_forgeguard_artifacts(root: &Path) -> Result<()> {
         }
         fs::write(&marker, "*\n")?;
     }
+    ignore_repository_paths(root, &[".forgeguard/".to_owned()])
+}
+
+/// Append repository-relative entries to an existing root `.gitignore`, once
+/// each. A repository without a `.gitignore` is left alone: creating one is a
+/// decision the user makes, not an install side effect.
+pub fn ignore_repository_paths(root: &Path, entries: &[String]) -> Result<()> {
     let root_ignore = root.join(".gitignore");
-    if root_ignore.is_file() {
-        let current = fs::read_to_string(&root_ignore).unwrap_or_default();
-        let already = current
+    if entries.is_empty() || !root_ignore.is_file() {
+        return Ok(());
+    }
+    // forgeguard: allow FG-SEC-007 -- the path is the caller's own repository root joined with a literal name
+    let mut updated = fs::read_to_string(&root_ignore).unwrap_or_default();
+    let mut changed = false;
+    for entry in entries {
+        let wanted = entry.trim_end_matches('/');
+        if updated
             .lines()
-            .any(|line| line.trim().trim_end_matches('/') == ".forgeguard");
-        if !already {
-            let mut updated = current;
-            if !updated.is_empty() && !updated.ends_with('\n') {
-                updated.push('\n');
-            }
-            updated.push_str(".forgeguard/\n");
-            fs::write(&root_ignore, updated)?;
+            .any(|line| line.trim().trim_end_matches('/') == wanted)
+        {
+            continue;
         }
+        if !updated.is_empty() && !updated.ends_with('\n') {
+            updated.push('\n');
+        }
+        updated.push_str(entry);
+        updated.push('\n');
+        changed = true;
+    }
+    if changed {
+        fs::write(&root_ignore, updated)?;
     }
     Ok(())
 }
