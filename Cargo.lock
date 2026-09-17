@@ -1032,8 +1032,9 @@ dependencies = [
 
 [[package]]
 name = "kurir"
-version = "0.1.0"
-source = "git+https://github.com/suiflex/kurir?rev=aa70c4113b05656f424bfd9f335276e80a3223dd#aa70c4113b05656f424bfd9f335276e80a3223dd"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1dd53cce0a0203e4435cc0afbf6325d685f1a4946db56437f122f95b27b4b184"
 dependencies = [
  "clap",
  "reqwest",

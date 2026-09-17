@@ -18,8 +18,7 @@ anyhow = "1.0"
 clap = { version = "4.5", features = ["derive"] }
 ignore = "0.4"
 inquire = "0.9"
-# Pinned until kurir 0.2.0 is published; switch to `kurir = "0.2"` then.
-kurir = { version = "0.1.0", git = "https://github.com/suiflex/kurir", rev = "aa70c4113b05656f424bfd9f335276e80a3223dd" }
+kurir = "0.2"
 regex = "1.10"
 # `bundled` compiles SQLite into the binary: no system library, no runtime service.
 rusqlite = { version = "0.40", features = ["bundled"] }
