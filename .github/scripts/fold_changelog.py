@@ -41,24 +41,49 @@ def strip_top_heading(text):
 
 def parse_version(section):
     """Read the released version off the generated section's heading."""
-    match = re.match(r"## (?:.+: )?\[([^\]]+)\]", section)
+    match = re.search(r"^## (?:.+: )?\[([^\]]+)\]", section, flags=re.MULTILINE)
     if not match:
         raise SystemExit("generated changelog has no version heading")
     return match.group(1)
 
 
+def extract_release_section(src_text, version=None):
+    """Extract (version, section) from src_text containing one or more sections."""
+    _, sections = split_sections(strip_top_heading(src_text))
+    if not sections:
+        stripped = strip_top_heading(src_text).strip("\n")
+        if not stripped:
+            raise SystemExit("generated changelog is empty")
+        v = parse_version(stripped)
+        return v, stripped
+
+    if version:
+        marker = f"## [{version}]"
+        for s in sections:
+            if s.startswith(marker) or re.match(r"^## (?:.+: )?\[" + re.escape(version) + r"\]", s):
+                return version, s.strip("\n")
+        raise SystemExit(f"generated changelog has no section for version {version}")
+
+    for s in sections:
+        m = re.match(r"^## (?:.+: )?\[([^\]]+)\]", s)
+        if m:
+            return m.group(1), s.strip("\n")
+
+    raise SystemExit("generated changelog has no version heading")
+
+
 def fold(src_text, dst_text, version=None, product="ForgeGuard"):
-    section = strip_top_heading(src_text).strip("\n")
-    if not section:
+    stripped = strip_top_heading(src_text).strip("\n")
+    if not stripped:
         raise SystemExit("generated changelog is empty")
 
-    version = version or parse_version(section)
+    version, section = extract_release_section(src_text, version=version)
 
     marker = f"## [{version}]"
-    prefixed = f"## {product}: [{version}]"
-    if section.startswith(marker):
+    prefixed = f"## {product}: [{version}]" if product else marker
+    if section.startswith(marker) and product:
         section = prefixed + section[len(marker):]
-    elif not section.startswith(prefixed):
+    elif not (section.startswith(marker) or section.startswith(prefixed)):
         raise SystemExit(
             f"generated section does not start with a {version} heading"
         )
@@ -93,10 +118,11 @@ def main():
     with open(dst, encoding="utf-8") as fh:
         dst_text = fh.read()
 
-    folded = fold(src_text, dst_text, product=product)
+    version, _ = extract_release_section(src_text)
+    folded = fold(src_text, dst_text, version=version, product=product)
     with open(dst, "w", encoding="utf-8") as fh:
         fh.write(folded)
-    print(f"folded {parse_version(strip_top_heading(src_text).strip())} into {dst}")
+    print(f"folded {version} into {dst}")
 
 
 if __name__ == "__main__":
