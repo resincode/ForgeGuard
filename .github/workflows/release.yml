@@ -71,12 +71,15 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # Linux ships static musl binaries. A glibc build on ubuntu-24.04 links
+          # against GLIBC_2.39 and refuses to start on anything older, including
+          # Ubuntu 22.04, Debian 12, and most CI base images.
           - runner: ubuntu-24.04
-            target: x86_64-unknown-linux-gnu
+            target: x86_64-unknown-linux-musl
             asset: forgeguard-linux-x86_64.tar.gz
             archive: tar
           - runner: ubuntu-24.04-arm
-            target: aarch64-unknown-linux-gnu
+            target: aarch64-unknown-linux-musl
             asset: forgeguard-linux-aarch64.tar.gz
             archive: tar
           - runner: macos-15-intel
@@ -108,6 +111,9 @@ jobs:
         run: |
           version="${{ inputs.tag || github.ref_name }}"
           cargo update -p forgeguard --precise "${version#v}"
+      - name: Install the musl C toolchain
+        if: endsWith(matrix.target, '-musl')
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
       - run: cargo build --locked --release --target ${{ matrix.target }}
       - name: Package Unix binary
         if: matrix.archive == 'tar'
