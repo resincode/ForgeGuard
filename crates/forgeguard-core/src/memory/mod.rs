@@ -289,7 +289,7 @@ pub struct LspReport {
 /// [`Store::is_empty`] on the result.
 pub fn ensure_current(root: &Path, config: &ScanConfig) -> Result<Store> {
     let store = Store::open(root)?;
-    if store.is_empty()? {
+    if store.is_empty()? || store.meta("commit")? != git::head_commit(root).unwrap_or(None) {
         index_repository(root, config, &IndexOptions::default())?;
     } else {
         let _ = refresh_changed(root, config, None);
@@ -329,7 +329,7 @@ pub fn index_repository(
     let mut present = Vec::new();
     for path in &files {
         let relative = path.strip_prefix(root).unwrap_or(path).to_path_buf();
-        match index_file(path, &relative, &mut store, &config, options.force)? {
+        match index_file(root, path, &relative, &mut store, &config, options.force)? {
             Some(FileOutcome::Parsed { renamed }) => {
                 report.parsed += 1;
                 report.renamed += usize::from(renamed);
@@ -343,13 +343,18 @@ pub fn index_repository(
         }
     }
 
-    if options.paths.is_none() {
-        // A full run owns the whole graph; a scoped run must not prune the rest.
-        let known = store.all_paths()?;
-        for path in known {
-            if !present.contains(&path) && store.remove_file(&path)? {
-                report.removed += 1;
-            }
+    // A full run owns the whole graph; a scoped run owns only the requested
+    // paths, including entries that became too large or otherwise unindexable.
+    let owned = match &options.paths {
+        None => store.all_paths()?,
+        Some(paths) => paths
+            .iter()
+            .map(|path| path.strip_prefix(root).unwrap_or(path).to_path_buf())
+            .collect(),
+    };
+    for path in owned {
+        if !present.contains(&path) && store.remove_file(&path)? {
+            report.removed += 1;
         }
     }
 
@@ -391,8 +396,7 @@ pub fn refresh_changed(
     let mut removed = 0;
     {
         let store = Store::open(root)?;
-        let (all, _existing) = git::changed_paths_partitioned(root)?;
-        for path in all {
+        for path in store.all_paths()? {
             if !root.join(&path).is_file() && store.remove_file(&path)? {
                 removed += 1;
             }
@@ -407,7 +411,7 @@ pub fn refresh_changed(
             ..IndexOptions::default()
         },
     )?;
-    report.removed = removed;
+    report.removed += removed;
     Ok(report)
 }
 
@@ -437,6 +441,12 @@ pub fn import_artifact(root: &Path, store: &mut Store) -> Result<bool> {
         if let Some(entry) = source.file_entry(&path)? {
             store.upsert_file(&path, &entry)?;
         }
+    }
+    if let Some(commit) = source.meta("commit")? {
+        store.set_meta("commit", &commit)?;
+    }
+    if let Some(last_indexed) = source.meta("last_indexed")? {
+        store.set_meta("last_indexed", &last_indexed)?;
     }
     Ok(true)
 }
@@ -489,6 +499,7 @@ enum FileOutcome {
 }
 
 fn index_file(
+    root: &Path,
     path: &Path,
     relative: &Path,
     store: &mut Store,
@@ -530,7 +541,7 @@ fn index_file(
     let renamed = store
         .paths_with_hash(&content_hash)?
         .iter()
-        .any(|known| known != relative && !path.with_file_name(known).exists());
+        .any(|known| known != relative && !root.join(known).is_file());
 
     let facts = extract::extract(profile, &source);
     let entry = FileEntry {

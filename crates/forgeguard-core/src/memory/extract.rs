@@ -201,6 +201,28 @@ fn classify(kind: &str) -> Option<SymbolKind> {
 }
 
 fn symbol_name(node: Node, source: &str) -> Option<String> {
+    if node.kind() == "arrow_function" || node.kind() == "function_expression" {
+        if let Some(parent) = node.parent() {
+            if parent.kind() == "variable_declarator" {
+                if let Some(name_node) = parent.child_by_field_name("name") {
+                    let value = terminal(text(name_node, source));
+                    if !value.is_empty() {
+                        return Some(value);
+                    }
+                }
+            } else if parent.kind() == "pair" || parent.kind() == "assignment_expression" {
+                if let Some(left) = parent
+                    .child_by_field_name("key")
+                    .or_else(|| parent.child_by_field_name("left"))
+                {
+                    let value = terminal(text(left, source));
+                    if !value.is_empty() {
+                        return Some(value);
+                    }
+                }
+            }
+        }
+    }
     // `impl Trait for Type` names the type it extends, not itself.
     if node.kind() == "impl_item" {
         return node
@@ -248,12 +270,23 @@ fn collect_extends(node: Node, source: &str) -> Vec<String> {
             continue;
         };
         let kind = child.kind();
-        if kind.contains("superclass")
+        if kind == "argument_list" {
+            // forgeguard: allow FG-ALG-001 -- bounded iteration over inheritance arguments
+            for i in 0..child.named_child_count() {
+                if let Some(arg) = child.named_child(i as u32) {
+                    if arg.kind() != "keyword_argument" {
+                        let term = terminal(text(arg, source));
+                        if !term.is_empty() {
+                            names.push(term);
+                        }
+                    }
+                }
+            }
+        } else if kind.contains("superclass")
             || kind.contains("base_clause")
             || kind.contains("extends")
             || kind.contains("implements")
             || kind.contains("heritage")
-            || kind == "argument_list"
         {
             names.extend(identifiers(child, source));
         }
@@ -568,7 +601,14 @@ fn quoted(node: Node, source: &str) -> Option<String> {
     if !(kind.contains("string") || kind.contains("template")) {
         return None;
     }
-    let raw = text(node, source).trim_matches(['"', '\'', '`']);
+    let mut raw = text(node, source).trim();
+    for prefix in ["r#", "r", "f", "b", "u"] {
+        if raw.starts_with(prefix) {
+            raw = &raw[prefix.len()..];
+            break;
+        }
+    }
+    let raw = raw.trim_matches(['"', '\'', '`', '#']);
     (!raw.is_empty()).then(|| raw.to_owned())
 }
 
@@ -927,19 +967,65 @@ fn plain_modules(rest: &str) -> Vec<String> {
 
 fn is_exported(node: Node, source: &str, profile: LanguageProfile, name: &str) -> bool {
     match profile.family() {
-        "rust" => text(node, source).starts_with("pub"),
+        "rust" => {
+            let raw = text(node, source);
+            raw.starts_with("pub")
+                || (0..node.named_child_count())
+                    .filter_map(|i| node.named_child(i as u32))
+                    .any(|child| {
+                        child.kind() == "visibility_modifier"
+                            && text(child, source).starts_with("pub")
+                    })
+                || raw
+                    .lines()
+                    .map(str::trim)
+                    .find(|line| {
+                        !line.is_empty()
+                            && !line.starts_with("#[")
+                            && !line.starts_with("///")
+                            && !line.starts_with("//")
+                            && !line.starts_with("/*")
+                    })
+                    .is_some_and(|line| line.starts_with("pub"))
+        }
         "go" => name.chars().next().is_some_and(char::is_uppercase),
         "python" => !name.starts_with('_'),
-        "javascript" => node
-            .parent()
-            .is_some_and(|parent| parent.kind().starts_with("export")),
+        "javascript" => {
+            let mut curr = Some(node);
+            let mut exported = false;
+            for _ in 0..4 {
+                if let Some(n) = curr {
+                    if n.kind().starts_with("export") {
+                        exported = true;
+                        break;
+                    }
+                    curr = n.parent();
+                } else {
+                    break;
+                }
+            }
+            exported
+        }
         _ => true,
     }
 }
 
 fn signature(node: Node, source: &str) -> String {
-    let first = text(node, source).split('\n').next().unwrap_or_default();
-    truncate(first.trim(), MAX_SIGNATURE)
+    let raw = text(node, source);
+    let first = raw
+        .lines()
+        .map(str::trim)
+        .find(|line| {
+            !line.is_empty()
+                && !line.starts_with("#[")
+                && !line.starts_with('@')
+                && !line.starts_with("///")
+                && !line.starts_with("//")
+                && !line.starts_with("/*")
+                && !line.starts_with('*')
+        })
+        .unwrap_or_else(|| raw.lines().next().unwrap_or_default().trim());
+    truncate(first, MAX_SIGNATURE)
 }
 
 fn text<'a>(node: Node, source: &'a str) -> &'a str {

@@ -79,14 +79,14 @@ pub fn trace_path(
         truncated: false,
     };
     let mut visited = BTreeSet::from([origin.id]);
-    let mut queue = VecDeque::from([(origin, 0_usize)]);
+    let mut queue = VecDeque::from([(origin, 0_usize, direction)]);
 
-    while let Some((current, current_depth)) = queue.pop_front() {
+    while let Some((current, current_depth, current_dir)) = queue.pop_front() {
         if current_depth == depth {
             continue;
         }
         // forgeguard: allow FG-ALG-001 -- each node is expanded once; the visited set and MAX_NODES bound the walk
-        for (edge, neighbour) in neighbours(store, &current, direction)? {
+        for (edge, neighbour) in neighbours(store, &current, current_dir)? {
             if !visited.insert(neighbour.id) {
                 continue;
             }
@@ -105,7 +105,7 @@ pub fn trace_path(
                 via: current.qualified.clone(),
                 is_test: neighbour.is_test,
             });
-            queue.push_back((neighbour, current_depth + 1));
+            queue.push_back((neighbour, current_depth + 1, edge));
         }
     }
 

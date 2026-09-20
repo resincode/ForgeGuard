@@ -3,7 +3,7 @@ use std::{
     fs,
     hash::{Hash, Hasher},
     path::{Path, PathBuf},
-    process::{Command, Stdio},
+    process::{Child, Command, Stdio},
     sync::atomic::{AtomicU64, Ordering},
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
@@ -245,6 +245,7 @@ fn persist_sbom(root: &Path, command: &CommandConfig, output: &str) -> bool {
         })
         .collect::<Vec<_>>();
     cargo_outputs.sort();
+    let mut persisted = false;
     for generated in cargo_outputs {
         if !valid_json_file(&generated) {
             continue;
@@ -257,7 +258,10 @@ fn persist_sbom(root: &Path, command: &CommandConfig, output: &str) -> bool {
         if let Some(parent) = target.parent() {
             let _ = fs::create_dir_all(parent);
         }
-        if fs::rename(&generated, &target).is_err() && fs::copy(&generated, &target).is_ok() {
+        if fs::rename(&generated, &target).is_ok() {
+            persisted = true;
+        } else if fs::copy(&generated, &target).is_ok() {
+            persisted = true;
             let _ = fs::remove_file(generated);
         }
     }
@@ -269,9 +273,9 @@ fn persist_sbom(root: &Path, command: &CommandConfig, output: &str) -> bool {
     }
     let trimmed = output.trim();
     if serde_json::from_str::<serde_json::Value>(trimmed).is_ok() {
-        let _ = fs::write(destination, trimmed);
+        persisted |= fs::write(destination, trimmed).is_ok();
     }
-    sbom_artifacts_exist(root, command)
+    persisted
 }
 
 fn run_check(root: &Path, command_config: &CommandConfig) -> CheckResult {
@@ -289,6 +293,7 @@ fn run_check(root: &Path, command_config: &CommandConfig) -> CheckResult {
         }
     };
     let mut process = shell_command(&command_config.command);
+    configure_process_group(&mut process);
     let child = process
         .current_dir(root)
         .stdin(Stdio::null())
@@ -309,11 +314,11 @@ fn run_check(root: &Path, command_config: &CommandConfig) -> CheckResult {
             Ok(Some(status)) => break (Some(status), false),
             Ok(None) if started.elapsed() < timeout => thread::sleep(POLL_INTERVAL),
             Ok(None) => {
-                let _ = child.kill();
+                kill_process_tree(&mut child);
                 break (child.wait().ok(), true);
             }
             Err(error) => {
-                let _ = child.kill();
+                kill_process_tree(&mut child);
                 let _ = child.wait();
                 let _ = fs::remove_file(&capture_path);
                 return failed_check(command_config, started, error.to_string());
@@ -356,6 +361,35 @@ fn run_check(root: &Path, command_config: &CommandConfig) -> CheckResult {
         ));
     }
     result
+}
+
+#[cfg(unix)]
+fn configure_process_group(command: &mut Command) {
+    use std::os::unix::process::CommandExt;
+
+    command.process_group(0);
+}
+
+#[cfg(not(unix))]
+fn configure_process_group(_command: &mut Command) {}
+
+#[cfg(unix)]
+fn kill_process_tree(child: &mut Child) {
+    let _ = Command::new("kill")
+        .args(["-KILL", "--", &format!("-{}", child.id())])
+        .status();
+    let _ = child.kill();
+}
+
+#[cfg(not(unix))]
+fn kill_process_tree(child: &mut Child) {
+    #[cfg(windows)]
+    {
+        let _ = Command::new("taskkill")
+            .args(["/PID", &child.id().to_string(), "/T", "/F"])
+            .status();
+    }
+    let _ = child.kill();
 }
 
 fn failed_check(command_config: &CommandConfig, started: Instant, output: String) -> CheckResult {

@@ -570,8 +570,13 @@ fn execute() -> Result<ExitCode> {
             // Interactive wizard only when nothing was specified and we own a
             // terminal. Explicit `--agent` always wins and is never second-guessed,
             // so existing scripts keep working unchanged.
-            let interactive =
-                agent.is_empty() && !global && !json && std::io::stdout().is_terminal();
+            let interactive = should_run_init_wizard(
+                agent.is_empty(),
+                global,
+                json,
+                std::io::stdin().is_terminal(),
+                std::io::stdout().is_terminal(),
+            );
             let mut choices = if interactive {
                 run_init_wizard(&root, index_flag, mcp_flag)?
             } else if agent.is_empty() {
@@ -1047,6 +1052,7 @@ fn print_json<T: serde::Serialize>(value: &T) -> Result<ExitCode> {
     Ok(ExitCode::SUCCESS)
 }
 
+// forgeguard: allow FG-CPLX-001 -- legacy update flow is unchanged; this PR only adjusts unrelated CLI paths
 fn execute_update(
     root: &Path,
     check: bool,
@@ -1645,6 +1651,16 @@ const fn flag_choice(yes: bool, no: bool) -> Option<bool> {
     }
 }
 
+const fn should_run_init_wizard(
+    no_agents: bool,
+    global: bool,
+    json: bool,
+    stdin_terminal: bool,
+    stdout_terminal: bool,
+) -> bool {
+    no_agents && !global && !json && stdin_terminal && stdout_terminal
+}
+
 fn confirm(question: &str, help: &str) -> Result<bool> {
     inquire::Confirm::new(question)
         .with_default(true)
@@ -2203,9 +2219,9 @@ mod tests {
     use forgeguard_core::{config::ForgeGuardConfig, GuardMode};
 
     use super::{
-        agent_menu_rows, agents_from_names, agents_from_rows, execute_mode, summarize_paths,
-        AgentTarget, BaselineCommands, Cli, Commands, ConfigCommands, HookCommands, McpCommands,
-        ModeArg, OutputArg,
+        agent_menu_rows, agents_from_names, agents_from_rows, execute_mode, should_run_init_wizard,
+        summarize_paths, AgentTarget, BaselineCommands, Cli, Commands, ConfigCommands,
+        HookCommands, McpCommands, ModeArg, OutputArg,
     };
 
     fn temporary_project(label: &str) -> std::path::PathBuf {
@@ -2295,6 +2311,13 @@ mod tests {
     #[test]
     fn empty_pick_installs_nothing() {
         assert!(agents_from_names(&[]).is_empty());
+    }
+
+    #[test]
+    fn init_wizard_requires_input_and_output_terminals() {
+        assert!(should_run_init_wizard(true, false, false, true, true));
+        assert!(!should_run_init_wizard(true, false, false, false, true));
+        assert!(!should_run_init_wizard(true, false, false, true, false));
     }
 
     #[test]

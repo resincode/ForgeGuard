@@ -116,8 +116,31 @@ const SUPPORTED: &str = "the only supported shapes are \
 `MATCH (a:Label) [WHERE ...] RETURN a.prop[, ...] [LIMIT n]` and \
 `MATCH (a:Label)-[:REL]->(b:Label) [WHERE ...] RETURN a.prop, b.prop [LIMIT n]`";
 
+fn strip_literals(query: &str) -> String {
+    let mut out = String::with_capacity(query.len());
+    let mut in_quote: Option<char> = None;
+    let mut escaped = false;
+    for ch in query.chars() {
+        if let Some(quote) = in_quote {
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == quote {
+                in_quote = None;
+            }
+        } else if ch == '"' || ch == '\'' {
+            in_quote = Some(ch);
+        } else {
+            out.push(ch);
+        }
+    }
+    out
+}
+
 fn forbidden_word(query: &str) -> Option<String> {
-    query
+    let stripped = strip_literals(query);
+    stripped
         .split(|character: char| !is_word_char(character))
         .map(str::to_ascii_lowercase)
         .find(|word| FORBIDDEN.contains(&word.as_str()))
@@ -435,10 +458,28 @@ fn find_keyword(upper: &str, keyword: &str, from: usize) -> Option<usize> {
     while let Some(offset) = upper.get(cursor..)?.find(keyword) {
         let start = cursor + offset;
         let end = start + keyword.len();
-        let before = start == 0 || !is_word_byte(bytes[start - 1]);
-        let after = end >= bytes.len() || !is_word_byte(bytes[end]);
-        if before && after {
-            return Some(start);
+        let mut in_quote: Option<u8> = None;
+        let mut escaped = false;
+        // forgeguard: allow FG-ALG-001 -- linear scan over query prefix to determine quote state
+        for &byte in &bytes[..start] {
+            if let Some(q) = in_quote {
+                if escaped {
+                    escaped = false;
+                } else if byte == b'\\' {
+                    escaped = true;
+                } else if byte == q {
+                    in_quote = None;
+                }
+            } else if byte == b'"' || byte == b'\'' {
+                in_quote = Some(byte);
+            }
+        }
+        if in_quote.is_none() {
+            let before = start == 0 || !is_word_byte(bytes[start - 1]);
+            let after = end >= bytes.len() || !is_word_byte(bytes[end]);
+            if before && after {
+                return Some(start);
+            }
         }
         cursor = end;
     }

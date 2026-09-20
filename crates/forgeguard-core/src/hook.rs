@@ -638,7 +638,7 @@ pub fn render_hook_decision(agent: HookAgent, decision: &HookDecision) -> String
             json!({"followup_message": reason}).to_string()
         }
         (HookAgent::Codex, HookDecision::Block(reason)) => {
-            json!({"decision": "block", "reason": reason}).to_string()
+            json!({"continue": true, "decision": "block", "reason": reason}).to_string()
         }
         (HookAgent::Antigravity, HookDecision::Block(reason)) => json!({
             "decision": "continue",

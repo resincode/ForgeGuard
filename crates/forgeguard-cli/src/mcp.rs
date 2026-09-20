@@ -46,6 +46,23 @@ struct TaskStatusRequest {
     session: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+enum DetailArg {
+    Metadata,
+    Structure,
+    Snippet,
+    Full,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+enum DirectionArg {
+    Inbound,
+    Outbound,
+    Both,
+}
+
 #[derive(Debug, Default, Deserialize, JsonSchema)]
 struct DoctorRequest {}
 
@@ -62,7 +79,7 @@ struct MemorySymbolRequest {
     /// Symbol name or `Type.method`.
     query: String,
     /// `metadata`, `structure` (default), `snippet`, or `full`.
-    detail: Option<String>,
+    detail: Option<DetailArg>,
     /// Maximum source bytes to return; defaults to 8192.
     max_bytes: Option<usize>,
 }
@@ -81,7 +98,7 @@ struct MemoryTraceRequest {
     /// Symbol name or `Type.method` to start from.
     query: String,
     /// `inbound` (callers), `outbound` (callees), or `both` (default).
-    direction: Option<String>,
+    direction: Option<DirectionArg>,
     /// Hops to follow, 1 to 5; defaults to 2.
     depth: Option<usize>,
 }
@@ -222,7 +239,7 @@ impl ForgeGuardMcp {
         let root = self.root.clone();
         blocking(move || {
             let store = ensure_index(&root)?;
-            let direction = parse_direction(request.direction.as_deref())?;
+            let direction = parse_direction(request.direction);
             trace_path(
                 &root,
                 &store,
@@ -263,7 +280,7 @@ impl ForgeGuardMcp {
         blocking(move || {
             let store = ensure_index(&root)?;
             let options = RetrievalOptions {
-                detail: parse_detail(request.detail.as_deref())?,
+                detail: parse_detail(request.detail),
                 max_bytes: request.max_bytes.unwrap_or(8192),
             };
             symbol_card(&root, &store, &request.query, &options)?
@@ -382,26 +399,20 @@ impl ForgeGuardMcp {
     }
 }
 
-fn parse_detail(value: Option<&str>) -> Result<Detail> {
+fn parse_detail(value: Option<DetailArg>) -> Detail {
     match value {
-        None | Some("structure") => Ok(Detail::Structure),
-        Some("metadata") => Ok(Detail::Metadata),
-        Some("snippet") => Ok(Detail::Snippet),
-        Some("full") => Ok(Detail::Full),
-        Some(other) => {
-            anyhow::bail!("unknown detail {other}: use metadata, structure, snippet, or full")
-        }
+        None | Some(DetailArg::Structure) => Detail::Structure,
+        Some(DetailArg::Metadata) => Detail::Metadata,
+        Some(DetailArg::Snippet) => Detail::Snippet,
+        Some(DetailArg::Full) => Detail::Full,
     }
 }
 
-fn parse_direction(value: Option<&str>) -> Result<Direction> {
+fn parse_direction(value: Option<DirectionArg>) -> Direction {
     match value {
-        None | Some("both") => Ok(Direction::Both),
-        Some("inbound") => Ok(Direction::Inbound),
-        Some("outbound") => Ok(Direction::Outbound),
-        Some(other) => {
-            anyhow::bail!("unknown direction {other}: use inbound, outbound, or both")
-        }
+        None | Some(DirectionArg::Both) => Direction::Both,
+        Some(DirectionArg::Inbound) => Direction::Inbound,
+        Some(DirectionArg::Outbound) => Direction::Outbound,
     }
 }
 
@@ -566,9 +577,7 @@ pub fn register_agents(root: &Path, agents: &[AgentTarget], quiet: bool) -> Vec<
                 }
             }
             Err(error) => {
-                if !quiet {
-                    eprintln!("  MCP registration skipped for {id}: {error}");
-                }
+                eprintln!("  MCP registration skipped for {id}: {error}");
             }
         }
     }

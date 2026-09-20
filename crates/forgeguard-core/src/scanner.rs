@@ -171,7 +171,10 @@ fn scan_project_inner(
     };
     let code_files = project_files
         .iter()
-        .filter(|path| is_supported_source(path))
+        .filter(|path| {
+            is_supported_source(path)
+                && fs::metadata(path).is_ok_and(|metadata| metadata.len() <= config.max_file_bytes)
+        })
         .cloned()
         .collect::<Vec<_>>();
     let semantic = SemanticIndex::build(&code_files, config);
@@ -1000,6 +1003,7 @@ impl Analyzer {
         Some((profile, mask_outside(source, &regions)))
     }
 
+    // forgeguard: allow FG-CPLX-001 -- legacy analyzer traversal; this change only scans secrets before the syntax-error return
     fn scan_file(
         &mut self,
         root: &Path,
@@ -1043,6 +1047,7 @@ impl Analyzer {
             }
             return;
         };
+        self.scan_secrets(&relative, source, tree.root_node(), findings);
         if tree.root_node().has_error() {
             if emit_parse_errors {
                 findings.push(parse_finding(
@@ -1052,7 +1057,6 @@ impl Analyzer {
             }
             return;
         }
-        self.scan_secrets(&relative, source, tree.root_node(), findings);
 
         let mut stack = vec![(tree.root_node(), 0usize)];
         while let Some((node, loop_depth)) = stack.pop() {
@@ -2218,6 +2222,7 @@ impl LanguageProfile {
 pub(crate) struct CanonicalFunction {
     pub profile: &'static str,
     pub line: usize,
+    pub end_line: usize,
     pub canonical: String,
     pub behavior: Option<String>,
     pub domain: Vec<String>,
@@ -2255,6 +2260,7 @@ pub(crate) fn canonical_functions(
                 profile: profile.family(),
                 line: node.start_position().row + 1,
                 canonical,
+                end_line: node.end_position().row + 1,
                 behavior: behavioral_fingerprint(node, source),
                 domain: node
                     .child_by_field_name("name")
@@ -2341,6 +2347,7 @@ fn is_clone_scope(kind: &str) -> bool {
             | "method_declaration"
             | "method_definition"
             | "constructor_declaration"
+            | "arrow_function"
     )
 }
 

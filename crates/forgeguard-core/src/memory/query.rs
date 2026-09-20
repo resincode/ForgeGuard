@@ -143,7 +143,7 @@ pub(crate) fn hit_from_row(store: &Store, row: &SymbolRow) -> Result<SymbolHit> 
         lines: row.lines(),
         exported: row.exported,
         is_test: row.is_test,
-        caller_count: store.caller_count(&row.name)?,
+        caller_count: store.callers_of(&row.name, row.container.as_deref())?.len(),
         callee_count: store.calls_of(row.id)?.len(),
         route_method: row.route_method.clone(),
         route_path: row.route_path.clone(),

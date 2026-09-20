@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeMap,
     fs,
     path::{Path, PathBuf},
 };
@@ -36,8 +37,7 @@ pub(crate) fn changed_coverage_finding(
     let source = fs::read_to_string(&report_path)
         .with_context(|| format!("failed to read {}", report_path.display()))?;
     let mut current = None;
-    let mut covered = 0usize;
-    let mut coverable = 0usize;
+    let mut changed_lines = BTreeMap::<(PathBuf, usize), u64>::new();
     for line in source.lines() {
         if let Some(path) = line.strip_prefix("SF:") {
             current = Some(normalize_path(root, Path::new(path)));
@@ -63,13 +63,17 @@ pub(crate) fn changed_coverage_finding(
                 .iter()
                 .any(|(start, end)| (*start..=*end).contains(&line_number))
         }) {
-            coverable += 1;
-            covered += usize::from(hits > 0);
+            let total = changed_lines
+                .entry((path.clone(), line_number))
+                .or_default();
+            *total = total.saturating_add(hits);
         }
     }
+    let coverable = changed_lines.len();
     if coverable == 0 {
         return Ok(None);
     }
+    let covered = changed_lines.values().filter(|hits| **hits > 0).count();
     let percent = covered.saturating_mul(100) / coverable;
     Ok((percent < minimum as usize).then(|| {
         coverage_finding(

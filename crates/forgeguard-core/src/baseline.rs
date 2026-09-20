@@ -156,11 +156,22 @@ fn write_baseline(root: &Path, findings: &[Finding]) -> Result<Baseline> {
     Ok(baseline)
 }
 
+fn normalize_evidence(rule_id: &str, evidence: &str) -> String {
+    if rule_id.starts_with("FG-DRY-") {
+        if let Some((prefix, line)) = evidence.rsplit_once(':') {
+            if line.chars().all(|c| c.is_ascii_digit()) {
+                return prefix.to_owned();
+            }
+        }
+    }
+    evidence.to_owned()
+}
+
 fn key_for_finding(finding: &Finding) -> BaselineKey {
     BaselineKey {
         rule_id: finding.rule_id.clone(),
         path: portable_path(&finding.path),
-        evidence: finding.evidence.clone(),
+        evidence: normalize_evidence(&finding.rule_id, &finding.evidence),
     }
 }
 
@@ -168,7 +179,7 @@ fn key_for_entry(entry: &BaselineEntry) -> BaselineKey {
     BaselineKey {
         rule_id: entry.rule_id.clone(),
         path: entry.path.clone(),
-        evidence: entry.evidence.clone(),
+        evidence: normalize_evidence(&entry.rule_id, &entry.evidence),
     }
 }
 

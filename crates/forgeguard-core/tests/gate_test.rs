@@ -273,6 +273,41 @@ fn changed_coverage_policy_ignores_documentation_only_changes() {
         .any(|finding| finding.rule_id == "FG-COV-001"));
 }
 
+#[test]
+fn changed_coverage_merges_duplicate_lcov_records() {
+    let directory = tempdir().expect("temp directory");
+    git(directory.path(), &["init", "--quiet"]);
+    git(
+        directory.path(),
+        &["config", "user.email", "test@example.com"],
+    );
+    git(
+        directory.path(),
+        &["config", "user.name", "ForgeGuard Test"],
+    );
+    fs::write(directory.path().join("app.ts"), "export const value = 1;\n").expect("write source");
+    git(directory.path(), &["add", "app.ts"]);
+    git(directory.path(), &["commit", "--quiet", "-m", "base"]);
+    fs::write(directory.path().join("app.ts"), "export const value = 2;\n").expect("change source");
+    fs::write(
+        directory.path().join("lcov.info"),
+        "TN:first\nSF:app.ts\nDA:1,1\nend_of_record\nTN:second\nSF:app.ts\nDA:1,0\nend_of_record\n",
+    )
+    .expect("write coverage");
+    let mut config = ForgeGuardConfig::new("sample", Vec::new());
+    config.mode = GuardMode::Strict;
+    config.scan.coverage_report = Some("lcov.info".into());
+    config.scan.min_changed_coverage = Some(100);
+
+    let report = run_changed_gate(directory.path(), &config, true, None).expect("changed gate");
+
+    assert!(!report
+        .findings
+        .iter()
+        .any(|finding| finding.rule_id == "FG-COV-001"));
+    assert_eq!(report.status, GateStatus::Passed);
+}
+
 fn git(root: &std::path::Path, args: &[&str]) {
     assert!(Command::new("git")
         .args(args)
