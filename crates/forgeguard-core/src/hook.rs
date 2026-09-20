@@ -126,6 +126,7 @@ pub enum HookAgent {
     Cursor,
     Antigravity,
     OpenClaw,
+    Omp,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -630,6 +631,7 @@ pub fn render_hook_decision(agent: HookAgent, decision: &HookDecision) -> String
         (HookAgent::Cursor, HookDecision::Pass) => "{}".to_owned(),
         (HookAgent::Antigravity, HookDecision::Pass) => json!({"decision": "stop"}).to_string(),
         (HookAgent::OpenClaw, HookDecision::Pass) => String::new(),
+        (HookAgent::Omp, HookDecision::Pass) => json!({"decision": "pass"}).to_string(),
         (_, HookDecision::Pass) => String::new(),
         (HookAgent::Claude, HookDecision::Block(reason)) => {
             json!({"decision": "block", "reason": reason}).to_string()
@@ -638,6 +640,9 @@ pub fn render_hook_decision(agent: HookAgent, decision: &HookDecision) -> String
             json!({"followup_message": reason}).to_string()
         }
         (HookAgent::Codex, HookDecision::Block(reason)) => {
+            json!({"continue": true, "decision": "block", "reason": reason}).to_string()
+        }
+        (HookAgent::Omp, HookDecision::Block(reason)) => {
             json!({"decision": "block", "reason": reason}).to_string()
         }
         (HookAgent::Antigravity, HookDecision::Block(reason)) => json!({
@@ -656,6 +661,9 @@ pub fn render_hook_decision(agent: HookAgent, decision: &HookDecision) -> String
         }
         (HookAgent::OpenClaw, HookDecision::Stop(reason)) => {
             json!({"action": "finalize", "reason": reason}).to_string()
+        }
+        (HookAgent::Omp, HookDecision::Stop(reason)) => {
+            json!({"decision": "stop", "reason": reason}).to_string()
         }
         (_, HookDecision::Stop(reason)) => json!({
             "continue": false,
@@ -991,6 +999,7 @@ pub fn evaluate_context_hook(
     let question_instruction = match agent {
         HookAgent::Claude => "call `AskUserQuestion`",
         HookAgent::Codex => "use `request_user_input` when available, otherwise ask directly",
+        HookAgent::Omp => "call `ask`",
         HookAgent::Cursor | HookAgent::Antigravity | HookAgent::OpenClaw => {
             "use the host's native structured user-input tool when available, otherwise ask directly"
         }
@@ -1008,7 +1017,7 @@ pub fn render_context_hook(agent: HookAgent, input: &str, context: &str) -> Stri
         .and_then(Value::as_str)
         .unwrap_or("SessionStart");
     match agent {
-        HookAgent::Codex | HookAgent::Claude => json!({
+        HookAgent::Codex | HookAgent::Claude | HookAgent::Omp => json!({
             "hookSpecificOutput": {
                 "hookEventName": event,
                 "additionalContext": context
@@ -1092,7 +1101,7 @@ pub fn evaluate_scope_hook(fallback_root: &Path, input: &str) -> Result<Option<S
 
 pub fn render_scope_warning(agent: HookAgent, warning: &str) -> String {
     match agent {
-        HookAgent::Codex | HookAgent::Claude => json!({
+        HookAgent::Codex | HookAgent::Claude | HookAgent::Omp => json!({
             "hookSpecificOutput": {
                 "hookEventName": "PreToolUse",
                 "additionalContext": warning

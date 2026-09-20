@@ -88,6 +88,33 @@ end
 }
 
 #[test]
+fn files_over_the_size_limit_are_excluded_from_duplicate_checks() {
+    let directory = tempdir().expect("temp directory");
+    let source = r#"
+pub fn normalize_customer(customer: Customer) -> CustomerView {
+    let normalized_name = customer.name.trim().to_lowercase();
+    let normalized_email = customer.email.trim().to_lowercase();
+    let is_active = customer.deleted_at.is_none();
+    let display_name = format!("{} <{}>", normalized_name, normalized_email);
+    CustomerView { normalized_name, normalized_email, is_active, display_name }
+}
+"#;
+    fs::write(directory.path().join("customer.rs"), source).expect("write first source");
+    fs::write(directory.path().join("account.rs"), source).expect("write second source");
+    let config = ScanConfig {
+        max_file_bytes: 100,
+        ..ScanConfig::default()
+    };
+
+    let findings =
+        scan_project(directory.path(), &config, &ScanOptions::default()).expect("scan project");
+
+    assert!(!findings
+        .iter()
+        .any(|finding| finding.rule_id.starts_with("FG-DRY-")));
+}
+
+#[test]
 fn reports_alpha_renamed_functions_but_preserves_literals() {
     let directory = tempdir().expect("temp directory");
     fs::write(

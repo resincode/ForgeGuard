@@ -45,6 +45,9 @@ pub(crate) const CODEX_SCOPE_HOOK_COMMAND: &str = "forgeguard hook scope --agent
 pub(crate) const CLAUDE_SCOPE_HOOK_COMMAND: &str = "forgeguard hook scope --agent claude";
 pub(crate) const CURSOR_SCOPE_HOOK_COMMAND: &str = "forgeguard hook scope --agent cursor";
 pub(crate) const ANTIGRAVITY_SCOPE_HOOK_COMMAND: &str = "forgeguard hook scope --agent antigravity";
+pub(crate) const OMP_HOOK_COMMAND: &str = "forgeguard hook stop --agent omp";
+pub(crate) const OMP_CONTEXT_HOOK_COMMAND: &str = "forgeguard hook context --agent omp";
+pub(crate) const OMP_SCOPE_HOOK_COMMAND: &str = "forgeguard hook scope --agent omp";
 
 fn hook_command(command: &str, scope: InstallScope) -> String {
     match scope {
@@ -134,6 +137,7 @@ pub enum AgentTarget {
     Copilot,
     Cline,
     Roo,
+    Omp,
     All,
 }
 
@@ -213,6 +217,7 @@ const ALL_AGENT_TARGETS: &[AgentTarget] = &[
     AgentTarget::Copilot,
     AgentTarget::Cline,
     AgentTarget::Roo,
+    AgentTarget::Omp,
 ];
 
 /// Paths that show an agent is actually used here, checked in the order of
@@ -245,6 +250,7 @@ const PROJECT_AGENT_MARKERS: &[(AgentTarget, &[&str])] = &[
     ),
     (AgentTarget::Cline, &[".clinerules"]),
     (AgentTarget::Roo, &[".roo", ".roorules"]),
+    (AgentTarget::Omp, &[".omp", "omp.json"]),
 ];
 
 /// Home-directory equivalents of `PROJECT_AGENT_MARKERS`. Copilot is absent
@@ -261,6 +267,7 @@ const GLOBAL_AGENT_MARKERS: &[(AgentTarget, &[&str])] = &[
     (AgentTarget::Antigravity, &[".gemini"]),
     (AgentTarget::Windsurf, &[".codeium/windsurf", ".devin"]),
     (AgentTarget::Roo, &[".roo"]),
+    (AgentTarget::Omp, &[".omp"]),
 ];
 
 /// Report which agents leave configuration under `root`, so `init` can install
@@ -368,6 +375,7 @@ fn install_agents(
             AgentTarget::Hermes => install_shared_skill_agent(root, target, scope, overwrite, log)?,
             AgentTarget::OpenClaw => install_openclaw(root, scope, overwrite, log)?,
             AgentTarget::Antigravity => install_antigravity(root, scope, overwrite, log)?,
+            AgentTarget::Omp => install_omp(root, scope, overwrite, log)?,
             AgentTarget::Windsurf
             | AgentTarget::Copilot
             | AgentTarget::Cline
@@ -429,6 +437,7 @@ fn ignore_project_agent_directories(
                 | AgentTarget::Hermes
                 | AgentTarget::OpenClaw
                 | AgentTarget::Antigravity
+                | AgentTarget::Omp
         )
     }) {
         entries.push(".agents/");
@@ -791,6 +800,42 @@ fn install_antigravity(
         &hook_path,
         "write_to_file|replace_file_content|multi_replace_file_content",
         ANTIGRAVITY_SCOPE_HOOK_COMMAND,
+        log,
+    )
+}
+
+fn install_omp(
+    root: &Path,
+    scope: InstallScope,
+    overwrite: bool,
+    log: &mut InstallLog,
+) -> Result<()> {
+    let policy_path = match scope {
+        InstallScope::Project => root.join("AGENTS.md"),
+        InstallScope::Global => root.join(".agents/AGENTS.md"),
+    };
+    write_file(root, &policy_path, AGENTS_TEMPLATE, overwrite, log)?;
+    install_skill(
+        root,
+        &skill_directory(Harness::Codex, scope)?,
+        overwrite,
+        log,
+    )?;
+
+    let InstallScope::Project = scope else {
+        return Ok(());
+    };
+    let hook_path = root.join(".agents/hooks.json");
+    let stop = hook_command(OMP_HOOK_COMMAND, scope);
+    let context = hook_command(OMP_CONTEXT_HOOK_COMMAND, scope);
+    let scope_hook = hook_command(OMP_SCOPE_HOOK_COMMAND, scope);
+    install_antigravity_simple_hook(root, &hook_path, "Stop", &stop, log)?;
+    install_antigravity_simple_hook(root, &hook_path, "PreInvocation", &context, log)?;
+    install_antigravity_tool_hook(
+        root,
+        &hook_path,
+        "write_to_file|replace_file_content|multi_replace_file_content|write|edit",
+        &scope_hook,
         log,
     )
 }

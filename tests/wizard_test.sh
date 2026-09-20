@@ -6,6 +6,10 @@
 # prompts read raw key events as they render rather than buffering a script.
 set -eu
 
+# This test asserts the coloured logo; do not inherit an operator's request for
+# plain terminal output into the pseudo-terminal fixture.
+unset NO_COLOR
+
 repository_root="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 # Prefer a debug build, which is what a developer has to hand, but fall back to
 # the release one: CI only ever runs `cargo build --release`, and `cargo test`

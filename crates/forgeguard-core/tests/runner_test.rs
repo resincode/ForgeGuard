@@ -26,6 +26,35 @@ fn command_timeout_stops_long_running_check() {
 
 #[cfg(unix)]
 #[test]
+fn command_timeout_stops_descendant_processes() {
+    use std::{fs, thread, time::Duration};
+
+    use forgeguard_core::{runner::run_checks, CommandConfig};
+    use tempfile::tempdir;
+
+    let directory = tempdir().expect("temp directory");
+    let results = run_checks(
+        directory.path(),
+        &[CommandConfig {
+            name: "slow-tree".to_owned(),
+            command: "(sleep 2; printf survived > escaped.txt) & wait".to_owned(),
+            required: true,
+            enabled: true,
+            timeout_seconds: 1,
+        }],
+    );
+    thread::sleep(Duration::from_secs(2));
+
+    assert!(!results[0].success);
+    assert!(!directory.path().join("escaped.txt").exists());
+    assert!(fs::read_dir(directory.path())
+        .expect("read temp directory")
+        .next()
+        .is_none());
+}
+
+#[cfg(unix)]
+#[test]
 fn supply_chain_checks_run_only_for_dependency_changes_and_reuse_the_cache() {
     use std::{fs, path::PathBuf};
 
@@ -111,6 +140,17 @@ fn sbom_output_is_persisted_and_missing_artifacts_invalidate_the_cache() {
     let regenerated = run_checks_for_changes(directory.path(), &[command], Some(&changed));
     assert!(regenerated[0].success && !regenerated[0].cached);
     assert!(artifact.is_file());
+
+    let invalid = CommandConfig {
+        name: "sbom".to_owned(),
+        command: "printf completed".to_owned(),
+        required: true,
+        enabled: true,
+        timeout_seconds: 10,
+    };
+    let rejected = run_checks_for_changes(directory.path(), &[invalid], Some(&changed));
+    assert!(!rejected[0].success);
+    assert!(rejected[0].output.contains("no valid JSON artifact"));
 }
 
 #[cfg(unix)]

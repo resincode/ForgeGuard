@@ -94,7 +94,7 @@ pub fn scan_duplicate_blocks(
                 blocking: false,
                 path: target.path.clone(),
                 line: target.line,
-                end_line: None,
+                end_line: Some(target.line.saturating_add(block_lines.saturating_sub(1))),
                 evidence: format!(
                     "A similar {}-line block also appears at {}:{}",
                     block_lines,
@@ -124,6 +124,7 @@ pub fn scan_duplicate_blocks(
 struct CloneOccurrence {
     path: PathBuf,
     line: usize,
+    end_line: usize,
     canonical: String,
     original: String,
 }
@@ -150,6 +151,7 @@ fn scan_renamed_duplicate_blocks(
                 .push(CloneOccurrence {
                     path: path.strip_prefix(root).unwrap_or(path).to_path_buf(),
                     line: function.line,
+                    end_line: function.end_line,
                     canonical: function.canonical,
                     original: function.original,
                 });
@@ -194,7 +196,7 @@ fn scan_renamed_duplicate_blocks(
                 blocking: false,
                 path: target.path.clone(),
                 line: target.line,
-                end_line: None,
+                end_line: Some(target.end_line),
                 evidence: format!(
                     "An alpha-renamed function also appears at {}:{}",
                     other.path.display(),
@@ -226,6 +228,7 @@ fn scan_behavioral_duplicates(
             let occurrence = CloneOccurrence {
                 path: path.strip_prefix(root).unwrap_or(path).to_path_buf(),
                 line: function.line,
+                end_line: function.end_line,
                 canonical: function.canonical,
                 original: function.original,
             };
@@ -273,7 +276,7 @@ fn scan_behavioral_duplicates(
                 blocking: false,
                 path: target.path.clone(),
                 line: target.line,
-                end_line: None,
+                end_line: Some(target.end_line),
                 evidence: format!(
                     "A differently structured function invokes the same API operations at {}:{}",
                     other.path.display(),

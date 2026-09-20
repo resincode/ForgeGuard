@@ -352,6 +352,7 @@ enum AgentArg {
     Copilot,
     Cline,
     Roo,
+    Omp,
     All,
 }
 
@@ -531,6 +532,7 @@ enum HookAgentArg {
     Antigravity,
     #[value(name = "openclaw")]
     OpenClaw,
+    Omp,
 }
 
 fn main() -> ExitCode {
@@ -570,8 +572,13 @@ fn execute() -> Result<ExitCode> {
             // Interactive wizard only when nothing was specified and we own a
             // terminal. Explicit `--agent` always wins and is never second-guessed,
             // so existing scripts keep working unchanged.
-            let interactive =
-                agent.is_empty() && !global && !json && std::io::stdout().is_terminal();
+            let interactive = should_run_init_wizard(
+                agent.is_empty(),
+                global,
+                json,
+                std::io::stdin().is_terminal(),
+                std::io::stdout().is_terminal(),
+            );
             let mut choices = if interactive {
                 run_init_wizard(&root, index_flag, mcp_flag)?
             } else if agent.is_empty() {
@@ -1120,20 +1127,8 @@ fn execute_update(
                 }
             }
             None => {
-                if json {
-                    println!(
-                        "{}",
-                        serde_json::json!({
-                            "status": "unknown",
-                            "version": VERSION,
-                            "update_available": false,
-                        })
-                    );
-                } else {
-                    println!(
-                        "ForgeGuard {VERSION} is up to date (could not check remote release)."
-                    );
-                }
+                print_update_unavailable(json);
+                return Ok(ExitCode::from(1));
             }
         }
         return Ok(ExitCode::SUCCESS);
@@ -1192,19 +1187,24 @@ fn execute_update(
             Ok(ExitCode::SUCCESS)
         }
         None => {
-            if json {
-                println!(
-                    "{}",
-                    serde_json::json!({
-                        "status": "up_to_date",
-                        "version": VERSION,
-                    })
-                );
-            } else {
-                println!("ForgeGuard {VERSION} is up to date (could not check remote release).");
-            }
-            Ok(ExitCode::SUCCESS)
+            print_update_unavailable(json);
+            Ok(ExitCode::from(1))
         }
+    }
+}
+
+fn print_update_unavailable(json: bool) {
+    if json {
+        println!(
+            "{}",
+            serde_json::json!({
+                "status": "unknown",
+                "version": VERSION,
+                "update_available": false,
+            })
+        );
+    } else {
+        eprintln!("Could not check the remote ForgeGuard release.");
     }
 }
 
@@ -1551,6 +1551,7 @@ impl From<AgentArg> for AgentTarget {
             AgentArg::Copilot => Self::Copilot,
             AgentArg::Cline => Self::Cline,
             AgentArg::Roo => Self::Roo,
+            AgentArg::Omp => Self::Omp,
             AgentArg::All => Self::All,
         }
     }
@@ -1574,6 +1575,7 @@ impl From<HookAgentArg> for HookAgent {
             HookAgentArg::Cursor => Self::Cursor,
             HookAgentArg::Antigravity => Self::Antigravity,
             HookAgentArg::OpenClaw => Self::OpenClaw,
+            HookAgentArg::Omp => Self::Omp,
         }
     }
 }
@@ -1592,6 +1594,7 @@ const AGENT_MENU: &[(&str, AgentTarget)] = &[
     ("copilot", AgentTarget::Copilot),
     ("cline", AgentTarget::Cline),
     ("roo", AgentTarget::Roo),
+    ("omp", AgentTarget::Omp),
 ];
 
 /// What each menu entry actually writes, so the picker states the cost of a row
@@ -1608,6 +1611,7 @@ const AGENT_SUMMARY: &[(&str, &str)] = &[
     ("copilot", "AGENTS.md only"),
     ("cline", "AGENTS.md only"),
     ("roo", "AGENTS.md only"),
+    ("omp", "AGENTS.md, shared skill, hooks, MCP"),
 ];
 
 const SCOPE_PROJECT: &str = "This repository";
@@ -1643,6 +1647,16 @@ const fn flag_choice(yes: bool, no: bool) -> Option<bool> {
         (_, true) => Some(false),
         _ => None,
     }
+}
+
+const fn should_run_init_wizard(
+    no_agents: bool,
+    global: bool,
+    json: bool,
+    stdin_terminal: bool,
+    stdout_terminal: bool,
+) -> bool {
+    no_agents && !global && !json && stdin_terminal && stdout_terminal
 }
 
 fn confirm(question: &str, help: &str) -> Result<bool> {
@@ -2203,9 +2217,9 @@ mod tests {
     use forgeguard_core::{config::ForgeGuardConfig, GuardMode};
 
     use super::{
-        agent_menu_rows, agents_from_names, agents_from_rows, execute_mode, summarize_paths,
-        AgentTarget, BaselineCommands, Cli, Commands, ConfigCommands, HookCommands, McpCommands,
-        ModeArg, OutputArg,
+        agent_menu_rows, agents_from_names, agents_from_rows, execute_mode, should_run_init_wizard,
+        summarize_paths, AgentTarget, BaselineCommands, Cli, Commands, ConfigCommands,
+        HookCommands, McpCommands, ModeArg, OutputArg,
     };
 
     fn temporary_project(label: &str) -> std::path::PathBuf {
@@ -2295,6 +2309,13 @@ mod tests {
     #[test]
     fn empty_pick_installs_nothing() {
         assert!(agents_from_names(&[]).is_empty());
+    }
+
+    #[test]
+    fn init_wizard_requires_input_and_output_terminals() {
+        assert!(should_run_init_wizard(true, false, false, true, true));
+        assert!(!should_run_init_wizard(true, false, false, false, true));
+        assert!(!should_run_init_wizard(true, false, false, true, false));
     }
 
     #[test]

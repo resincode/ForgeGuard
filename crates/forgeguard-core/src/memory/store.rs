@@ -171,6 +171,7 @@ impl Store {
         connection.pragma_update(None, "journal_mode", "WAL")?;
         connection.pragma_update(None, "foreign_keys", "ON")?;
         connection.pragma_update(None, "synchronous", "NORMAL")?;
+        connection.busy_timeout(std::time::Duration::from_secs(5))?;
         let mut store = Self { connection };
         store.apply_schema()?;
         Ok(store)
@@ -186,7 +187,6 @@ impl Store {
     }
 
     fn apply_schema(&mut self) -> Result<()> {
-        self.connection.execute_batch(SCHEMA)?;
         let version: Option<String> = self
             .connection
             .query_row(
@@ -194,12 +194,25 @@ impl Store {
                 [],
                 |row| row.get(0),
             )
-            .optional()?;
+            .optional()
+            .unwrap_or(None);
         match version.as_deref().map(str::parse::<u32>) {
-            Some(Ok(found)) if found == SCHEMA_VERSION => Ok(()),
-            None => self.set_meta("schema_version", &SCHEMA_VERSION.to_string()),
+            Some(Ok(found)) if found == SCHEMA_VERSION => {
+                self.connection.execute_batch(SCHEMA)?;
+                Ok(())
+            }
+            Some(Ok(_mismatch)) => {
+                let _ = self.connection.execute_batch(
+                    "DROP TABLE IF EXISTS service_links; DROP TABLE IF EXISTS extends;
+                     DROP TABLE IF EXISTS calls; DROP TABLE IF EXISTS symbols;
+                     DROP TABLE IF EXISTS exports; DROP TABLE IF EXISTS imports;
+                     DROP TABLE IF EXISTS files; DROP TABLE IF EXISTS meta;",
+                );
+                self.connection.execute_batch(SCHEMA)?;
+                self.set_meta("schema_version", &SCHEMA_VERSION.to_string())
+            }
             _ => {
-                self.reset()?;
+                self.connection.execute_batch(SCHEMA)?;
                 self.set_meta("schema_version", &SCHEMA_VERSION.to_string())
             }
         }
@@ -212,6 +225,7 @@ impl Store {
              DELETE FROM symbols; DELETE FROM exports; DELETE FROM imports;
              DELETE FROM files; DELETE FROM meta;",
         )?;
+        self.set_meta("schema_version", &SCHEMA_VERSION.to_string())?;
         Ok(())
     }
 
@@ -695,7 +709,7 @@ impl Store {
                  SELECT t.id FROM calls c
                  JOIN symbols t ON t.name = c.callee
                  WHERE c.symbol_id = ?1
-                   AND (c.receiver IS NULL OR t.container IS NULL OR t.container = c.receiver)
+                   AND (c.receiver IS NULL OR t.container = c.receiver)
              ) ORDER BY f.path, s.start_line",
             params![symbol_id],
         )
@@ -929,12 +943,33 @@ fn text(path: &Path) -> String {
 /// The last path-like segment of an import, which is what every language's
 /// import syntax has in common.
 pub fn module_stem(module: &str) -> String {
-    module
-        .rsplit(['/', '.', ':', '\\'])
+    let trimmed = module.trim();
+    let last_segment = trimmed
+        .rsplit(['/', '\\', ':'])
         .find(|part| !part.trim().is_empty())
-        .unwrap_or_default()
-        .trim()
-        .to_lowercase()
+        .unwrap_or(trimmed);
+    let without_ext = last_segment
+        .strip_suffix(".js")
+        .or_else(|| last_segment.strip_suffix(".ts"))
+        .or_else(|| last_segment.strip_suffix(".tsx"))
+        .or_else(|| last_segment.strip_suffix(".jsx"))
+        .or_else(|| last_segment.strip_suffix(".mjs"))
+        .or_else(|| last_segment.strip_suffix(".cjs"))
+        .or_else(|| last_segment.strip_suffix(".mts"))
+        .or_else(|| last_segment.strip_suffix(".cts"))
+        .or_else(|| last_segment.strip_suffix(".py"))
+        .or_else(|| last_segment.strip_suffix(".rs"))
+        .unwrap_or(last_segment);
+    if without_ext.contains('.') && (without_ext.starts_with('.') || last_segment != trimmed) {
+        without_ext.trim().to_lowercase()
+    } else {
+        without_ext
+            .rsplit('.')
+            .find(|part| !part.trim().is_empty())
+            .unwrap_or(without_ext)
+            .trim()
+            .to_lowercase()
+    }
 }
 
 fn wildcard_to_like(pattern: &str) -> String {

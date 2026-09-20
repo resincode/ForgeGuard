@@ -1116,3 +1116,36 @@ fn a_symlinked_policy_file_is_never_written_through() {
         .file_type()
         .is_symlink());
 }
+
+#[test]
+fn omp_initialization_installs_rules_skills_and_hooks() {
+    let directory = tempdir().expect("temp directory");
+    fs::write(
+        directory.path().join("Cargo.toml"),
+        "[package]\nname = \"sample\"\nversion = \"0.1.0\"\n",
+    )
+    .expect("write manifest");
+
+    let report = initialize_project(
+        directory.path(),
+        &InitOptions {
+            force: false,
+            refresh: false,
+            agents: vec![AgentTarget::Omp],
+        },
+    )
+    .expect("install for omp");
+
+    assert_eq!(report.agents, vec![AgentTarget::Omp]);
+    assert!(directory.path().join("AGENTS.md").is_file());
+    assert!(directory
+        .path()
+        .join(".agents/skills/forgeguard-engineering/SKILL.md")
+        .is_file());
+    assert!(directory.path().join(".agents/hooks.json").is_file());
+    let hooks =
+        fs::read_to_string(directory.path().join(".agents/hooks.json")).expect("read hooks");
+    assert!(hooks.contains("forgeguard hook stop --agent omp"));
+    assert!(hooks.contains("forgeguard hook context --agent omp"));
+    assert!(hooks.contains("forgeguard hook scope --agent omp"));
+}

@@ -3,10 +3,11 @@ use std::{fs, path::Path, process::Command};
 use forgeguard_core::{
     config::ScanConfig,
     memory::{
-        analyze_impact, architecture, delete_project, export_artifact, find_symbols,
-        index_repository, index_status, refresh_changed, run_query, search_symbols, symbol_card,
-        trace_path, watch_repository, Detail, Direction, IndexOptions, IndexReport, LspOptions,
-        MemoryStats, RetrievalOptions, RiskLevel, Store, SymbolKind, WatchOptions, BEST_LEVEL,
+        analyze_impact, architecture, delete_project, ensure_current, export_artifact,
+        find_symbols, index_repository, index_status, refresh_changed, run_query, search_symbols,
+        symbol_card, trace_path, watch_repository, Call, Detail, Direction, FileEntry,
+        IndexOptions, IndexReport, LspOptions, MemoryStats, RetrievalOptions, RiskLevel, Store,
+        Symbol, SymbolKind, WatchOptions, BEST_LEVEL,
     },
 };
 use tempfile::{tempdir, TempDir};
@@ -236,6 +237,21 @@ fn renaming_a_file_moves_its_symbols_to_the_new_path() {
         .file_entry(Path::new("src/session.ts"))
         .expect("read entry")
         .is_none());
+}
+
+#[test]
+fn copying_a_file_is_not_reported_as_a_rename() {
+    let directory = fixture();
+    index(directory.path());
+    fs::copy(
+        directory.path().join("src/session.ts"),
+        directory.path().join("src/session_copy.ts"),
+    )
+    .expect("copy file");
+
+    let report = index(directory.path());
+
+    assert_eq!(report.renamed, 0, "the original path still exists");
 }
 
 #[test]
@@ -762,6 +778,111 @@ fn a_deleted_file_leaves_the_graph_on_a_changed_only_refresh() {
 }
 
 #[test]
+fn a_committed_deletion_leaves_the_graph_on_a_base_refresh() {
+    let directory = git_repository();
+    index(directory.path());
+    git(directory.path(), &["rm", "src/session.ts"]);
+    git(
+        directory.path(),
+        &["commit", "--quiet", "-m", "delete session"],
+    );
+
+    let report =
+        refresh_changed(directory.path(), &ScanConfig::default(), Some("HEAD~1")).expect("refresh");
+
+    assert_eq!(report.removed, 1);
+    assert!(store(directory.path())
+        .file_entry(Path::new("src/session.ts"))
+        .expect("read entry")
+        .is_none());
+}
+
+#[test]
+fn a_changed_file_that_becomes_too_large_leaves_the_graph() {
+    let directory = git_repository();
+    index(directory.path());
+    write(
+        directory.path(),
+        "src/session.ts",
+        &format!("{SESSION}\n// changed"),
+    );
+    let config = ScanConfig {
+        max_file_bytes: 1,
+        ..ScanConfig::default()
+    };
+
+    let report = refresh_changed(directory.path(), &config, None).expect("refresh");
+
+    assert_eq!(report.removed, 1);
+    assert!(store(directory.path())
+        .file_entry(Path::new("src/session.ts"))
+        .expect("read entry")
+        .is_none());
+}
+
+#[test]
+fn caller_count_uses_the_same_receiver_scope_as_callers() {
+    fn symbol(name: &str, container: Option<&str>, receiver: Option<&str>) -> Symbol {
+        Symbol {
+            name: name.to_owned(),
+            container: container.map(str::to_owned),
+            kind: if container.is_some() {
+                SymbolKind::Method
+            } else {
+                SymbolKind::Function
+            },
+            start_line: 1,
+            end_line: 1,
+            signature: format!("{name}()"),
+            exported: true,
+            calls: receiver
+                .map(|receiver| Call {
+                    name: "run".to_owned(),
+                    receiver: Some(receiver.to_owned()),
+                    ..Call::default()
+                })
+                .into_iter()
+                .collect(),
+            extends: Vec::new(),
+            route: None,
+            links: Vec::new(),
+        }
+    }
+
+    let directory = tempdir().expect("temp directory");
+    let mut store = store(directory.path());
+    store
+        .upsert_file(
+            Path::new("src/callers.rs"),
+            &FileEntry {
+                language: "rust".to_owned(),
+                content_hash: "content".to_owned(),
+                symbols_hash: "symbols".to_owned(),
+                mtime: 0,
+                size: 0,
+                is_test: false,
+                last_indexed: 0,
+                imports: Vec::new(),
+                exports: Vec::new(),
+                symbols: vec![
+                    symbol("run", Some("Alpha"), None),
+                    symbol("run", Some("Beta"), None),
+                    symbol("call_alpha", None, Some("Alpha")),
+                    symbol("call_beta", None, Some("Beta")),
+                ],
+            },
+        )
+        .expect("upsert fixture");
+
+    let hit = find_symbols(directory.path(), &store, "Alpha.run", 1)
+        .expect("find")
+        .pop()
+        .expect("hit");
+
+    assert_eq!(hit.caller_count, 1);
+}
+
+#[test]
 fn status_reports_index_presence_and_staleness_against_head() {
     let directory = git_repository();
     let before = index_status(directory.path()).expect("status");
@@ -774,6 +895,34 @@ fn status_reports_index_presence_and_staleness_against_head() {
     assert_eq!(after.files, 4);
     assert!(!after.stale, "indexed at the checked-out commit");
     assert_eq!(after.commit, after.head_commit);
+}
+
+#[test]
+fn ensure_current_rebuilds_after_checking_out_a_different_commit() {
+    let directory = git_repository();
+    write(
+        directory.path(),
+        "src/auth.ts",
+        "export function replacement() { return true; }\n",
+    );
+    git(directory.path(), &["add", "src/auth.ts"]);
+    git(
+        directory.path(),
+        &["commit", "--quiet", "-m", "replace auth"],
+    );
+    index(directory.path());
+    git(directory.path(), &["checkout", "--quiet", "HEAD~1"]);
+
+    let store = ensure_current(directory.path(), &ScanConfig::default()).expect("refresh index");
+
+    assert!(find_symbols(directory.path(), &store, "replacement", 10)
+        .expect("find replacement")
+        .is_empty());
+    assert!(
+        !find_symbols(directory.path(), &store, "AuthService.isFresh", 10)
+            .expect("find restored symbol")
+            .is_empty()
+    );
 }
 
 #[test]
@@ -817,11 +966,11 @@ fn the_shared_artifact_seeds_a_fresh_checkout_without_a_full_parse() {
         "the artifact carried the symbols; only stat checks ran"
     );
     assert_eq!(report.reused, 4);
-    assert!(
+    assert_eq!(
         find_symbols(clone.path(), &store(clone.path()), "validateToken", 5)
             .expect("find")
-            .len()
-            == 1
+            .len(),
+        1
     );
 }
 
@@ -880,4 +1029,124 @@ fn the_watcher_reports_only_ticks_that_changed_something() {
     assert_eq!(ticks.len(), 1);
     assert!(!ticks[0].changed, "an unchanged tree parses nothing");
     assert_eq!(ticks[0].report.parsed, 0);
+}
+
+#[test]
+fn rust_decorated_functions_have_clean_signatures_and_are_exported() {
+    let directory = tempdir().expect("temp directory");
+    write(
+        directory.path(),
+        "src/lib.rs",
+        "#[inline]\n#[must_use]\npub fn decorated_fn() -> bool {\n    true\n}\n\n/// A documented function.\npub fn documented_fn() {}\n",
+    );
+    index(directory.path());
+    let store = store(directory.path());
+    let symbols = store.all_symbols().expect("all symbols");
+
+    let decorated = symbols
+        .iter()
+        .find(|s| s.name == "decorated_fn")
+        .expect("decorated_fn symbol");
+    assert!(
+        decorated.exported,
+        "decorated pub function must be exported"
+    );
+    assert!(
+        decorated.signature.starts_with("pub fn decorated_fn"),
+        "signature must skip attributes: {}",
+        decorated.signature
+    );
+
+    let documented = symbols
+        .iter()
+        .find(|s| s.name == "documented_fn")
+        .expect("documented_fn symbol");
+    assert!(
+        documented.exported,
+        "documented pub function must be exported"
+    );
+    assert!(
+        documented.signature.starts_with("pub fn documented_fn"),
+        "signature must skip doc comments: {}",
+        documented.signature
+    );
+}
+
+#[test]
+fn typescript_arrow_functions_and_expressions_are_extracted_and_exported() {
+    let directory = tempdir().expect("temp directory");
+    write(
+        directory.path(),
+        "src/arrows.ts",
+        "export const handler = (req: any, res: any) => {\n    return true;\n};\n",
+    );
+    index(directory.path());
+    let store = store(directory.path());
+    let symbols = store.all_symbols().expect("all symbols");
+
+    let arrow = symbols
+        .iter()
+        .find(|s| s.name == "handler")
+        .expect("handler symbol must be extracted from arrow function");
+    assert_eq!(arrow.kind, SymbolKind::Function);
+    assert!(
+        arrow.exported,
+        "exported const arrow function must be exported"
+    );
+}
+
+#[test]
+fn python_raw_routes_and_clean_superclasses() {
+    let directory = tempdir().expect("temp directory");
+    write(
+        directory.path(),
+        "src/views.py",
+        "class Item(models.Model):\n    pass\n\n@app.route(r\"/api/items\")\ndef list_items():\n    pass\n",
+    );
+    index(directory.path());
+    let store = store(directory.path());
+    let symbols = store.all_symbols().expect("all symbols");
+
+    let item = symbols
+        .iter()
+        .find(|s| s.name == "Item")
+        .expect("Item symbol");
+    let extends = store.extends_of(item.id).expect("extends");
+    assert_eq!(
+        extends,
+        vec!["Model"],
+        "extends must not contain qualifier 'models'"
+    );
+
+    let route_fn = symbols
+        .iter()
+        .find(|s| s.name == "list_items")
+        .expect("list_items symbol");
+    assert_eq!(route_fn.route_path.as_deref(), Some("/api/items"));
+}
+
+#[test]
+fn cypher_allows_common_identifiers_like_delete_and_select_in_string_literals() {
+    let directory = fixture();
+    index(directory.path());
+    let store = store(directory.path());
+
+    // Common method/function names in codebases must not be rejected by forbidden word filters inside literals
+    let result = run_query(
+        directory.path(),
+        &store,
+        "MATCH (f:Function) WHERE f.name = \"delete\" RETURN f.name",
+        10,
+    )
+    .expect("query with 'delete' literal must succeed");
+    assert_eq!(result.columns, vec!["f.name"]);
+
+    let result_select = run_query(
+        directory.path(),
+        &store,
+        "MATCH (f:Function) WHERE f.name = \"select\" RETURN f.name",
+        10,
+    )
+    .expect("query with 'select' literal must succeed");
+    assert_eq!(result_select.columns, vec!["f.name"]);
 }

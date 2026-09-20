@@ -16,3 +16,8 @@
 # Throwaway repositories for trying `forgeguard init` by hand. Built by
 # `sh tests/sandbox.sh`; safe to delete at any time.
 /sandbox/
+.mcp.json
+__pycache__/
+*.pyc
+/jobs/
+/benchmarks/deepswe/results/
