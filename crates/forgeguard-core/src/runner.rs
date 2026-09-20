@@ -376,7 +376,7 @@ fn configure_process_group(_command: &mut Command) {}
 #[cfg(unix)]
 fn kill_process_tree(child: &mut Child) {
     let _ = Command::new("kill")
-        .args(["-KILL", &format!("-{}", child.id())])
+        .args(["-KILL", "--", &format!("-{}", child.id())])
         .status();
     let _ = child.kill();
 }
