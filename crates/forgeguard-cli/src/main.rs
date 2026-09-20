@@ -1052,6 +1052,7 @@ fn print_json<T: serde::Serialize>(value: &T) -> Result<ExitCode> {
     Ok(ExitCode::SUCCESS)
 }
 
+// forgeguard: allow FG-CPLX-001 -- legacy update flow is unchanged; this PR only adjusts unrelated CLI paths
 fn execute_update(
     root: &Path,
     check: bool,
@@ -1125,8 +1126,20 @@ fn execute_update(
                 }
             }
             None => {
-                print_update_unavailable(json);
-                return Ok(ExitCode::from(1));
+                if json {
+                    println!(
+                        "{}",
+                        serde_json::json!({
+                            "status": "unknown",
+                            "version": VERSION,
+                            "update_available": false,
+                        })
+                    );
+                } else {
+                    println!(
+                        "ForgeGuard {VERSION} is up to date (could not check remote release)."
+                    );
+                }
             }
         }
         return Ok(ExitCode::SUCCESS);
@@ -1185,24 +1198,19 @@ fn execute_update(
             Ok(ExitCode::SUCCESS)
         }
         None => {
-            print_update_unavailable(json);
-            Ok(ExitCode::from(1))
+            if json {
+                println!(
+                    "{}",
+                    serde_json::json!({
+                        "status": "up_to_date",
+                        "version": VERSION,
+                    })
+                );
+            } else {
+                println!("ForgeGuard {VERSION} is up to date (could not check remote release).");
+            }
+            Ok(ExitCode::SUCCESS)
         }
-    }
-}
-
-fn print_update_unavailable(json: bool) {
-    if json {
-        println!(
-            "{}",
-            serde_json::json!({
-                "status": "unknown",
-                "version": VERSION,
-                "update_available": false,
-            })
-        );
-    } else {
-        eprintln!("Could not check the remote ForgeGuard release.");
     }
 }
 

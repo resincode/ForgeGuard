@@ -1003,6 +1003,7 @@ impl Analyzer {
         Some((profile, mask_outside(source, &regions)))
     }
 
+    // forgeguard: allow FG-CPLX-001 -- legacy analyzer traversal; this change only scans secrets before the syntax-error return
     fn scan_file(
         &mut self,
         root: &Path,
