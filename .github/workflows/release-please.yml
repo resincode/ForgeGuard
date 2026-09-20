@@ -96,3 +96,25 @@ jobs:
             echo "no credited block for $version yet; leaving the body as-is"
           fi
           rm -f release-notes.md
+
+  release:
+    needs: release-please
+    if: needs.release-please.outputs.release_created == 'true'
+    permissions:
+      contents: write
+    uses: ./.github/workflows/release.yml
+    # The tap and bucket jobs need TAP_PUBLISH_TOKEN; a called workflow gets no secrets
+    # unless the caller passes them.
+    secrets: inherit
+    with:
+      tag: ${{ needs.release-please.outputs.tag_name }}
+
+  npm-publish:
+    needs: [release-please, release]
+    if: needs.release-please.outputs.release_created == 'true'
+    permissions:
+      contents: read
+      id-token: write
+    uses: ./.github/workflows/npm-publish.yml
+    with:
+      tag: ${{ needs.release-please.outputs.tag_name }}

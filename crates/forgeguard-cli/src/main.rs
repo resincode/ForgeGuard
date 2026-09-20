@@ -352,7 +352,6 @@ enum AgentArg {
     Copilot,
     Cline,
     Roo,
-    Omp,
     All,
 }
 
@@ -532,7 +531,6 @@ enum HookAgentArg {
     Antigravity,
     #[value(name = "openclaw")]
     OpenClaw,
-    Omp,
 }
 
 fn main() -> ExitCode {
@@ -1551,7 +1549,6 @@ impl From<AgentArg> for AgentTarget {
             AgentArg::Copilot => Self::Copilot,
             AgentArg::Cline => Self::Cline,
             AgentArg::Roo => Self::Roo,
-            AgentArg::Omp => Self::Omp,
             AgentArg::All => Self::All,
         }
     }
@@ -1575,7 +1572,6 @@ impl From<HookAgentArg> for HookAgent {
             HookAgentArg::Cursor => Self::Cursor,
             HookAgentArg::Antigravity => Self::Antigravity,
             HookAgentArg::OpenClaw => Self::OpenClaw,
-            HookAgentArg::Omp => Self::Omp,
         }
     }
 }
@@ -1594,7 +1590,6 @@ const AGENT_MENU: &[(&str, AgentTarget)] = &[
     ("copilot", AgentTarget::Copilot),
     ("cline", AgentTarget::Cline),
     ("roo", AgentTarget::Roo),
-    ("omp", AgentTarget::Omp),
 ];
 
 /// What each menu entry actually writes, so the picker states the cost of a row
@@ -1611,7 +1606,6 @@ const AGENT_SUMMARY: &[(&str, &str)] = &[
     ("copilot", "AGENTS.md only"),
     ("cline", "AGENTS.md only"),
     ("roo", "AGENTS.md only"),
-    ("omp", "AGENTS.md, shared skill, hooks, MCP"),
 ];
 
 const SCOPE_PROJECT: &str = "This repository";

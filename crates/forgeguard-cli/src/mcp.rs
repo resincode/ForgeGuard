@@ -510,7 +510,7 @@ const fn project_harness(agent: AgentTarget) -> Option<&'static str> {
         AgentTarget::Cursor => Some("cursor"),
         AgentTarget::OpenCode => Some("opencode"),
         AgentTarget::OpenClaw => Some("openclaw"),
-        AgentTarget::Antigravity | AgentTarget::Omp => Some("antigravity-cli"),
+        AgentTarget::Antigravity => Some("antigravity-cli"),
         _ => None,
     }
 }

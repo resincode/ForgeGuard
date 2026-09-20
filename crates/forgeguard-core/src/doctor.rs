@@ -14,7 +14,7 @@ use crate::{
         CLAUDE_CONTEXT_HOOK_COMMAND, CLAUDE_HOOK_COMMAND, CLAUDE_SCOPE_HOOK_COMMAND,
         CODEX_CONTEXT_HOOK_COMMAND, CODEX_HOOK_COMMAND, CODEX_SCOPE_HOOK_COMMAND,
         CURSOR_CONTEXT_HOOK_COMMAND, CURSOR_HOOK_COMMAND, CURSOR_SCOPE_HOOK_COMMAND,
-        LEGACY_SKILL_NAMES, OMP_CONTEXT_HOOK_COMMAND, OMP_HOOK_COMMAND, OMP_SCOPE_HOOK_COMMAND,
+        LEGACY_SKILL_NAMES,
     },
 };
 
@@ -130,19 +130,6 @@ fn hook_statuses(root: &Path) -> Vec<HookStatus> {
                 ANTIGRAVITY_SCOPE_HOOK_COMMAND,
             ],
             shared_skill && root.join(".agents/rules/forgeguard.md").is_file(),
-        ),
-        (
-            "omp",
-            ".agents/hooks.json",
-            [
-                OMP_HOOK_COMMAND,
-                OMP_CONTEXT_HOOK_COMMAND,
-                OMP_SCOPE_HOOK_COMMAND,
-            ],
-            shared_skill
-                && (root.join(".omp").exists()
-                    || root.join("omp.json").is_file()
-                    || root.join(".agents/hooks.json").is_file()),
         ),
     ]
     .into_iter()
