@@ -104,8 +104,9 @@ jobs:
         with:
           ref: ${{ inputs.tag || github.ref_name }}
       - uses: dtolnay/rust-toolchain@788abdaa468b02b2d53a3d1d8fcac62dc9858f4a # stable
-        with:
-          targets: ${{ matrix.target }}
+      - name: Install the release target
+        shell: bash
+        run: rustup target add "${{ matrix.target }}"
       - name: Sync Cargo.lock to this release's version
         shell: bash
         run: |
