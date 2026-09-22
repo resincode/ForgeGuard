@@ -213,6 +213,36 @@ pub fn detect_project(root: &Path) -> Result<ProjectDetection> {
         add_optional_command(&mut commands, "dependency-audit", "composer audit");
     }
 
+    let has_cmake = root.join("CMakeLists.txt").exists();
+    let has_makefile = ["Makefile", "makefile", "GNUmakefile"]
+        .iter()
+        .any(|name| root.join(name).exists());
+    if has_cmake || has_makefile {
+        languages.insert("C/C++".to_owned());
+        test_tools.insert("C/C++ test".to_owned());
+        if has_cmake {
+            package_managers.insert("CMake".to_owned());
+            // Configure and build in one step so a fresh checkout works, then
+            // run CTest against the configured build directory.
+            add_command(
+                &mut commands,
+                "build",
+                "cmake -S . -B build && cmake --build build",
+                true,
+            );
+            add_command(
+                &mut commands,
+                "test",
+                "cmake -S . -B build && ctest --test-dir build --output-on-failure",
+                true,
+            );
+        } else {
+            package_managers.insert("Make".to_owned());
+            add_command(&mut commands, "build", "make", true);
+            add_command(&mut commands, "test", "make test", true);
+        }
+    }
+
     if root.join("Gemfile").exists() {
         languages.insert("Ruby".to_owned());
         package_managers.insert("Bundler".to_owned());
